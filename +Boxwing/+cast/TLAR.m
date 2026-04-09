@@ -52,7 +52,7 @@ classdef TLAR
     methods(Static)
 
         function obj = Boxwing
-            obj = BoxWing.cast.TLAR();
+            obj = Boxwing.cast.TLAR();
             obj.Alt_alternate   = 22e3  ./ SI.ft;
             obj.Range_alternate = 200   ./ SI.Nmile;
             obj.Loiter          = 30    ./ SI.min;
