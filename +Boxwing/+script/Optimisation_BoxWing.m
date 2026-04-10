@@ -43,8 +43,7 @@ x0_1     = x0;  x0_1(5) = 1.0;
 
 obj_DOC = @(x) mdo_wrapper(x, 'DOC');
 
-[x_opt1, DOC_opt1, flag1] = fmincon(obj_DOC, x0_1, ...
-    [], [], [], [], lb1, ub1, [], opts_verbose);
+[x_opt1, DOC_opt1, flag1] = fmincon(obj_DOC, x0_1, [], [], [], [], lb1, ub1, [], opts_verbose);
 
 % Evaluate both objectives at the Run 1 optimum for later normalisation
 [DOC_at1, ATR_at1] = eval_both(x_opt1, n_flights);  
@@ -380,20 +379,25 @@ if ~isfinite(ADP.MTOM) || ADP.MTOM > 5e6 || ADP.MTOM < 1e4
 end
 
 % Evaluate objective
-T_max_kN = ADP.Engine.T_Static / 1000;
+T_max_kN = 400; % ADP.Engine.T_Static / 1000;
 
 switch upper(objective)
     case 'DOC'
         try
-            J = Boxwing.script.DOC(ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
-                    N_fleet, SAF_ratio, M_c, T_max_kN);
-        catch
+            [DOC, breakdown, no_landings, total_init, labour, V_max] = Boxwing.script.DOC(ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, N_fleet, SAF_ratio, M_c, T_max_kN);
+            J = DOC;
+            disp(breakdown)
+            disp(ADP)
+            disp(sizing_out)
+        catch 
             J = PENALTY;
         end
 
     case 'ATR'
         try
-            J = Boxwing.script.ClimateImpact(ADP, sizing_out.BlockFuel, N_fleet, n_flights, SAF_ratio);
+            [ATR100, climate_bd] = Boxwing.cast.eng.Engine_code(ADP.MTOM, ADP.OEM, s_ref, ADP.AR_target, ADP.TLAR.Range, ADP.TLAR.M_c);
+            %  J = Boxwing.script.ClimateImpact(ADP, sizing_out.BlockFuel, N_fleet, n_flights, SAF_ratio);
+            J = ATR100;
         catch
             J = PENALTY;
         end
@@ -403,8 +407,13 @@ switch upper(objective)
 end
 
 % Final guard — if result is non-finite, return penalty
-if ~isfinite(J)
+% Ensure scalar output
+if isempty(J) || ~isscalar(J) || ~isfinite(J)
     J = PENALTY;
+end
+if ~isscalar(J)
+    disp('DEBUG: Non-scalar objective detected');
+    disp(J);
 end
 end
 
@@ -418,7 +427,7 @@ end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [DOC, ATR, doc_bd, atr_bd] = eval_full(x, n_flights)
+function [DOC, ATR, breakdown, atr_bd] = eval_full(x, n_flights)
 % EVAL_FULL  Evaluate both objectives AND return full breakdown structs.
 %  Used only for the breakdown figure — not called during optimisation.
 
@@ -431,14 +440,14 @@ Alt_m     = x(4) * 1e3;
 SAF_ratio = min(max(x(5), 0), 1);
 Range_m   = x(6) * 1e3;
 
-ADP = BoxWing.B777.ADP();
-ADP.TLAR              = BoxWing.cast.TLAR.Boxwing();
+ADP = Boxwing.B777.ADP();
+ADP.TLAR              = Boxwing.cast.TLAR.Boxwing();
 ADP.TLAR.M_c          = M_c;
 ADP.TLAR.Alt_cruise   = Alt_m;
 ADP.TLAR.Alt_max      = max(Alt_m + 500, ADP.TLAR.Alt_max);
 ADP.TLAR.Range        = Range_m;
 ADP.TLAR.Payload      = 736e3 / N_fleet;
-ADP.Engine            = BoxWing.cast.eng.TurboFan.GE90(1.0, Alt_m, M_c);
+ADP.Engine            = Boxwing.cast.eng.TurboFan.GE90(1.0, Alt_m, M_c);
 ADP.CockpitLength     = 6.5;
 ADP.CabinRadius       = 2.93;
 ADP.CabinLength       = 70.0 - 6.5 - 2.93*2*1.48;
@@ -447,19 +456,19 @@ ADP.FrontWingSpan     = Span_m;
 ADP.RearWingSpan      = Span_m;
 ADP.ConnectorHeight   = 8;
 ADP.updateDerivedProps();
-ADP.MTOM    = 3.0 * ADP.TLAR.Payload;
+ADP.MTOM    = 3.0 * ADP.TLAR.Payload
 ADP.Mf_Fuel = 0.28; ADP.Mf_res = 0.04;
 ADP.Mf_Ldg  = 0.75; ADP.Mf_TOC = 0.98;
 
-[ADP, sizing_out] = BoxWing.B777.Size(ADP, false);
+[ADP, sizing_out] = Boxwing.B777.Size(ADP, false);
 
-T_max_kN = ADP.Engine.T_Static / 1000;
+T_max_kN = ADP.Engine.T_Static / 1000
 
-[DOC, doc_bd] = BoxWing.script.DOC( ...
-    ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
-    N_fleet, SAF_ratio, M_c, T_max_kN);
+[DOC, breakdown, no_landings, total_init, labour, V_max] = Boxwing.script.DOC(ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, N_fleet, SAF_ratio, M_c, T_max_kN);
+    disp(breakdown)
+% function [DOC, breakdown, no_landings, total_init, labour, V_max] = DOC(MTOM_t, OEM_kg, BlockFuel_kg, fleet_size, SAF_ratio, M_c, T_max_K)
 
 s_ref = 422.5;
-[ATR, atr_bd] = BoxWing.cast.eng.Engine_code(ADP.MTOM, ADP.OEM, s_ref, ADP.AR_target, ADP.TLAR.Range, ADP.TLAR.M_c);
+[ATR, atr_bd] = Boxwing.cast.eng.Engine_code(ADP.MTOM, ADP.OEM, s_ref, ADP.AR_target, ADP.TLAR.Range, ADP.TLAR.M_c);
 
 end
