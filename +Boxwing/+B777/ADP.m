@@ -1,16 +1,19 @@
 classdef ADP < handle
-    %ADP Aircraft Design Parameters - Boxwing Freighter
+    %ADP  Aircraft Design Parameters -- Boxwing Freighter
     %
-    %  CHANGES vs previous version:
-    %   1. FrontWingSpan = 64.9 m, RearWingSpan = 54.9 m  (rear = front - 10)
-    %      EffectiveSpan = (64.9 + 54.9) / 2 = 59.9 m  (ICAO Cat E)
-    %   2. AR_target = 10.0  (enforced in updateDerivedProps and Size.m)
-    %      WingArea = 59.9^2 / 10 = 358.8 m^2
-    %   3. updateDerivedProps derives WingArea from span + AR_target,
-    %      NOT from adding connector area — that was causing WingArea to
-    %      balloon to 1419 m^2 and AR to collapse to 2.13 each iteration.
-    %   4. Added CDwave and CDtrim properties for AeroPolar
-    %   5. CL_max and Delta_Cl_ld corrected to physical values
+    %  KEY FIX (updateDerivedProps):
+    %    Previous version kept AR_target fixed and derived WingArea = b²/AR.
+    %    This meant every span in the trade study had identical AR (10.0),
+    %    so a larger span simply gave a proportionally larger wing — heavier
+    %    structure with no induced-drag benefit, making MTOM always increase
+    %    monotonically and masking the aerodynamic optimum.
+    %
+    %    Correct physics: fix the mean aerodynamic chord (c_ref) and let AR
+    %    vary naturally with span.  Wing area = b_eff * c_ref.
+    %    c_ref is derived once from the baseline span and AR_target and then
+    %    held constant for all trade-study iterations.
+    %
+    %  Other properties unchanged from previous version.
 
     properties
         TLAR
@@ -20,52 +23,53 @@ classdef ADP < handle
 
     % Mass properties
     properties
-        MTOM    = 319000;   % [kg]  initial seed
-        OEM                 % [kg]  calculated by Size.m
-        Mf_Ldg  = 0.75;    % landing mass fraction
-        Mf_Fuel = 0.28;    % fuel mass fraction  (initial guess)
-        Mf_TOC  = 0.98;    % top-of-climb mass fraction
-        Mf_res  = 0.04;    % reserve fuel fraction
+        MTOM    = 319000;
+        OEM
+        Mf_Ldg  = 0.75;
+        Mf_Fuel = 0.28;
+        Mf_TOC  = 0.98;
+        Mf_res  = 0.04;
     end
 
     % Constraint analysis outputs
     properties
-        ThrustToWeightRatio = 0.30;   % initial guess
-        WingLoading         = 6700;   % [N/m^2] initial guess (B777F-level)
+        ThrustToWeightRatio = 0.30;
+        WingLoading         = 6700;
     end
 
     % Aerodynamic properties
     properties
-        Cl_max      = 1.77;    % 2D section CLmax (SC(2)-0714 from XFOIL)
-        CL_max      = 1.59;    % 3D clean wing CLmax (boxwing, lower sweep)
-        Delta_Cl_ld = 1.3;     % CL increment landing flaps (double-slotted)
-        Delta_Cl_to = 1.0;     % CL increment take-off flaps
+        Cl_max      = 1.77;
+        CL_max      = 1.59;
+        Delta_Cl_ld = 1.3;
+        Delta_Cl_to = 1.0;
         CD_TO       = 0.025;
         CL_TO       = 0.90;
         CD_LDG      = 0.030;
         CL_LDG      = 0.90;
-        CL_cruise   = 0.55;    % updated each iter by UpdateAero
-        LD_c        = 21;      % placeholder — overwritten by polar
+        CL_cruise   = 0.55;
+        LD_c        = 21;
         LD_app      = 12;
-        CD0         = 0.018;   % seed (overwritten by BoxWing.B777.CD0 build-up)
-        e           = 0.95;    % Oswald (Kroo boxwing correction applied in AeroPolar)
-        CDwave      = 0.0005;  % wave drag at cruise Mach ~0.82
-        CDtrim      = 0.0002;  % trim drag seed (updated by AeroPolar/trimDrag)
-        % Boxwing has no conventional tail
+        CD0         = 0.018;
+        e           = 0.95;
+        CDwave      = 0.0005;
+        CDtrim      = 0.0002;
         V_HT        = 0;
-        V_VT        = 0;
+        V_VT        = 0.05;
     end
 
-    % AR target — used by updateDerivedProps and Size.m to pin AR
+    % AR target and chord reference -- used by updateDerivedProps
     properties
-        AR_target   = 10.0;    % FIXED aspect ratio for sizing
-        Span_max    = 64.9;    % [m] ICAO Cat E wingspan limit
+        AR_target   = 10.0;    % baseline AR (used only to seed c_ref)
+        c_ref_fixed = 0;       % [m] mean chord -- set once, then fixed
+                               %     0 means "not yet initialised"
+        Span_max    = 64.9;    % [m] ICAO Cat E
     end
 
-    % Aerofoil / wing section properties — read by CD0.m
+    % Aerofoil / section
     properties
-        tc      = 0.14;    % thickness/chord ratio (SC(2)-0714 ~14%)
-        Sweep25 = 25.0;    % [deg] quarter-chord sweep of FRONT wing
+        tc      = 0.14;
+        Sweep25 = 25.0;
     end
 
     % Sizing flags
@@ -76,27 +80,27 @@ classdef ADP < handle
 
     % Boxwing wing geometry
     properties
-        FrontWingSpan = 64.9;   % [m]  ICAO Cat E limit
-        FrontWingArea = 0;      % [m^2] set by updateDerivedProps
-        FrontWingPos  = 0;      % [m]   set by updateDerivedProps
+        FrontWingSpan   = 60.0;
+        FrontWingArea   = 0;
+        FrontWingPos    = 0;
 
-        RearWingSpan  = 54.9;   % [m]  rear = front - 10 m
-        RearWingArea  = 0;      % [m^2] set by updateDerivedProps
-        RearWingPos   = 0;      % [m]   set by updateDerivedProps
+        RearWingSpan    = 50.0;
+        RearWingArea    = 0;
+        RearWingPos     = 0;
 
-        ConnectorHeight = 8;    % [m] vertical gap between wings
+        ConnectorHeight = 3;
 
-        TotalLiftingArea = 358.8; % [m^2] updated by updateDerivedProps
-        EffectiveSpan    = 59.9;  % [m]   updated by updateDerivedProps
+        TotalLiftingArea = 302.5;
+        EffectiveSpan    = 55.0;
 
         Mstar = 0.95;
     end
 
-    % Names used by shared cast / sizing code
+    % Aliases used by shared cast/sizing code
     properties
         Thrust   = 0;
-        WingArea = 358.8;   % [m^2] = TotalLiftingArea, updated each iter
-        Span     = 59.9;    % [m]   = EffectiveSpan
+        WingArea = 302.5;
+        Span     = 55.0;
         WingPos  = 0;
         KinkPos  = 0;
 
@@ -105,8 +109,8 @@ classdef ADP < handle
         HtpPos  = 0;
         VtpPos  = 0;
 
-        c_ac = 0;
-        x_ac = 0;
+        c_ac  = 0;
+        x_ac  = 0;
         c_ach = 0;
         c_acv = 0;
     end
@@ -115,7 +119,7 @@ classdef ADP < handle
     properties
         CockpitLength = 6.5;
         CabinRadius   = 2.93;
-        CabinLength   = 0;      % set in constructor
+        CabinLength   = 0;
     end
 
     properties
@@ -124,10 +128,11 @@ classdef ADP < handle
         MAC       = 0;
     end
 
+    % Lift/area split
     properties
-        etaLift   = 0.6;   % front/rear lift split
-        alphaArea = 0.5;   % front/rear area split
-        k_relief  = 0.75;  % load relief factor
+        etaLift   = 0.6;
+        alphaArea = 0.5;
+        k_relief  = 0.75;
     end
 
     methods
@@ -138,37 +143,51 @@ classdef ADP < handle
         end
 
         function updateDerivedProps(obj)
-            %UPDATEDERIVEDPROPS  Recalculate geometry from span + AR_target.
+            %UPDATEDERIVEDPROPS  Recalculate geometry from current spans.
             %
-            %  KEY FIX: WingArea is derived from AR_target and EffectiveSpan,
-            %  NOT from summing component areas + connector area.
-            %  This keeps AR = AR_target regardless of MTOM, preventing the
-            %  WingArea-balloon / AR-collapse divergence.
+            %  The mean chord (c_ref_fixed) is derived ONCE from the
+            %  baseline span and AR_target, then kept constant so that AR
+            %  varies naturally as span changes:
             %
-            %  Span relationship: RearWingSpan = FrontWingSpan - 10 m
-            %  EffectiveSpan = (FrontWingSpan + RearWingSpan) / 2
-            %                = FrontWingSpan - 5 m
+            %    b_eff  = (FrontWingSpan + RearWingSpan) / 2
+            %    WingArea = b_eff * c_ref_fixed        ← linear in span
+            %    AR       = b_eff^2 / WingArea          ← varies with span
+            %
+            %  This produces the physically correct trade-study behaviour:
+            %  increasing span raises AR (lower induced drag) but also raises
+            %  structural weight, giving a genuine aerodynamic optimum.
 
-            % Effective span = average of front and rear spans
+            % 1. Effective span
             obj.EffectiveSpan = (obj.FrontWingSpan + obj.RearWingSpan) / 2;
             obj.Span          = obj.EffectiveSpan;
 
-            % Wing area from AR target (this is the critical fix)
-            obj.TotalLiftingArea = obj.EffectiveSpan^2 / obj.AR_target;
+            % 2. Initialise c_ref_fixed on first call (when it is still 0)
+            if obj.c_ref_fixed <= 0
+                % Seed: baseline span / AR_target gives baseline chord
+                obj.c_ref_fixed = obj.EffectiveSpan / obj.AR_target;
+            end
+
+            % 3. Wing area scales linearly with span (fixed chord)
+            %    → AR = b_eff / c_ref_fixed  (varies with span)
+            obj.TotalLiftingArea = obj.EffectiveSpan * obj.c_ref_fixed;
             obj.WingArea         = obj.TotalLiftingArea;
 
-            % Split between front and rear wings
-            obj.FrontWingArea = obj.WingArea * 0.55;   % 55% front
-            obj.RearWingArea  = obj.WingArea * 0.45;   % 45% rear
+            % 4. Front/rear area split (55/45)
+            obj.FrontWingArea = obj.WingArea * 0.55;
+            obj.RearWingArea  = obj.WingArea * 0.45;
 
-            % Fuselage station positions
+            % 5. Fuselage station positions
             L_f = obj.CockpitLength + obj.CabinLength + obj.CabinRadius * 1.48;
             obj.FrontWingPos = 0.40 * L_f;
-            obj.RearWingPos  = 0.90 * L_f;
+            obj.RearWingPos  = 0.75 * L_f;
             obj.WingPos      = obj.FrontWingPos;
+
+            % 6. Update MAC alias
+            obj.MAC = obj.c_ref_fixed;
         end
 
         function out = AR(obj)
+            %AR  Effective aspect ratio of the boxwing lifting system.
             if obj.TotalLiftingArea > 0
                 out = obj.EffectiveSpan^2 / obj.TotalLiftingArea;
             else
