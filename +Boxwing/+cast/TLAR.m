@@ -72,6 +72,8 @@ classdef TLAR
             obj.Crew             = 3;
             obj.CrewMass         = (80+10) * obj.Crew;
 
+            % obj.T_Static = 500; %kN
+
             obj.H_to_screen           = 35    ./ SI.ft;
             obj.TOCG_AEO_gearUp       = 0.027;
             obj.TOCG_OEI_gearDown     = 0.030;
@@ -85,6 +87,7 @@ classdef TLAR
             obj.Alt_speed_restriction = 10e3  ./ SI.ft;
             obj.Vmax_below_10k        = 250   ./ SI.knt;
             obj.ISA_deltaT_climb      = 0;
+     
         end
 
         %function obj = B777F

@@ -11,7 +11,8 @@ MAX_ITER = 120;
 relax    = 0.30;
 tol      = 200;
 MTOM_CAP = 15 * obj.TLAR.Payload;
-
+% T_Static = obj.TLAR.T_Static;
+% obj.TLAR.T_Static = T_Static;
 if verbose
     fprintf('  Iter |   MTOM (t) |  OEM (t) | Fuel (t) |  W/S  |  delta (kg)\n');
     fprintf('  -----|------------|----------|----------|-------|------------\n');
@@ -85,8 +86,8 @@ while delta > tol && iter < MAX_ITER
 
     %% Mission analysis
     try
-        [BlockFuel, TripFuel, ResFuel, Mf_TOC, ~] = ...
-            Boxwing.B777.MissionAnalysis(obj, obj.TLAR.Range, obj.MTOM);
+        [BlockFuel, TripFuel, ResFuel, Mf_TOC, ~, ~, ~] = ...
+            Boxwing.script.MissionAnalysis.MissionAnalysisRefined(obj, obj.TLAR.Range, obj.MTOM);
     catch ME
         fprintf('  FAILED at iter %d: %s\n', iter, ME.message);
         break;

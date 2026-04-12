@@ -205,8 +205,10 @@ fprintf('═══════════════════════�
 fprintf('   MISSION ANALYSIS\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
-[BlockFuel, TripFuel, ResFuel, Mf_TOC, MissionTime, cruise_FL] = ...
-    Boxwing.B777.MissionAnalysis(ADP, ADP.TLAR.Range, ADP.MTOM);
+[BlockFuel, TripFuel, ResFuel, Mf_TOC, MissionTime, cruise_FL, detail] = ...
+    Boxwing.script.MissionAnalysis.MissionAnalysisRefined(ADP, ADP.TLAR.Range, ADP.MTOM);
+[season, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, ceil(736e3 / ADP.TLAR.Payload), 1);
+
 
 fprintf('Design Range:    %.0f NM\n',  ADP.TLAR.Range * SI.Nmile);
 fprintf('Trip Fuel:       %.1f t\n',   TripFuel/1e3);

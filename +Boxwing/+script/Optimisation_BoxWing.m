@@ -361,7 +361,7 @@ ADP.Mf_Ldg  = 0.75;
 ADP.Mf_TOC  = 0.98;
 
 % [~, ~, total_fuel_burn] = Engine_code(MTOM, OEW, s_ref, ar, range_km,  mach)
-[MissionAnalysis] = Boxwing.script.MissionAnalysisPM(N_fleet, M_c, ADP.TLAR.Alt_cruise, ADP.MTOM, ADP.TLAR.Range/1000);
+[MissionAnalysis] = Boxwing.script.MissionAnalysis.MissionAnalysisPM(N_fleet, M_c, ADP.TLAR.Alt_cruise, ADP.MTOM, ADP.TLAR.Range/1000);
 n_flights = MissionAnalysis.num_landings;
 % Run MDO inner loop
 try

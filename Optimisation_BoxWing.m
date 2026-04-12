@@ -19,7 +19,7 @@ clear; clc; close all;
 %   x(6) Range_km   7000-12000 design range [km]
 
 %    payload [kg] M_c   Span   Alt   SAF   Range_km  MTOM_t
-lb = [ 40000,    0.80,   40,  10.0,   0,    6000  ]; % lower boundary
+lb = [ 100000,    0.80,   40,  10.0,   0,    10000  ]; % lower boundary
 ub = [250000,    0.92,   65,  15.5,   1,   17000  ]; % upper boundary
 n_vars = numel(lb);
 
@@ -27,7 +27,7 @@ x_nom = [123000,   0.85,   60,  11.0,   1.0,  8000 ];  % nominal design
 MTOM = 450;
 TOTAL_PAYLOAD_KG = 736e3;   % fixed mission total payload [kg]
 fleet_nom = round(TOTAL_PAYLOAD_KG / x_nom(1));  % implied fleet size at nominal payload per ac
-[results] = Boxwing.script.MissionAnalysisPM(fleet_nom, x_nom(2), x_nom(4), MTOM,  x_nom(6));
+[results] = Boxwing.script.MissionAnalysis.MissionAnalysisPM(fleet_nom, x_nom(2), x_nom(4), MTOM,  x_nom(6));
 N_FLIGHTS        = results.num_landings;      % flights/aircraft/season (F1: 18 legs + 5 refuels)
 PENALTY          = 1e12;    % returned on any failure
 
@@ -94,6 +94,7 @@ scatter(lhs_DOC(feasible)/1e6,  lhs_ATR(feasible),  50,'b','filled', 'DisplayNam
 xlabel('DOC [M$/season]','FontSize',11);
 ylabel('ATR_{100} [K]','FontSize',11);
 title('DOC vs ATR100 — LHS cloud');
+
 legend('Location','best');
 
 nexttile; hold on; grid on;
@@ -159,20 +160,20 @@ obj_ATR = @(x) mdo_wrapper(x,'ATR',N_FLIGHTS,TOTAL_PAYLOAD_KG,PENALTY);
 % Seed
 x_seeds_atr = [x_seed_atr; x_opt1];   % try both seeds
 best_ATR2 = inf;  best_x2 = x_seed_atr;
-for s = 1:size(x_seeds_atr, 1)
-    try
-        [xi, fi] = fmincon(obj_ATR, x_seeds_atr(s,:), [], [], [], [], ...
-                           lb, ub, [], opts_sqp);
-        if fi < best_ATR2
-            best_ATR2 = fi;  best_x2 = xi;
-        end
-    catch; end
-end
-x_opt2 = best_x2;
-flag2 = best_ATR2;
+% for s = 1:size(x_seeds_atr, 1)
+%    try
+%        [xi, fi] = fmincon(obj_ATR, x_seeds_atr(s,:), [], [], [], [], ...
+%                           lb, ub, [], opts_sqp);
+%        if fi < best_ATR2
+%            best_ATR2 = fi;  best_x2 = xi;
+%        end
+%    catch; end
+%end
+%x_opt2 = best_x2;
+%flag2 = best_ATR2;
 
-% [x_opt2, ~, flag2] = fmincon(obj_ATR, x_seed_atr, ...
-%     [],[],[],[], lb, ub, [], opts_sqp);
+ [x_opt2, ~, flag2] = fmincon(obj_ATR, x_seed_atr, ...
+     [],[],[],[], lb, ub, [], opts_sqp);
 [DOC_at2, ATR_at2] = eval_both(x_opt2,N_FLIGHTS,TOTAL_PAYLOAD_KG,PENALTY);
 
 fprintf('\n── SQP Run 2 (min ATR100) ──────────────────────────────────\n');
@@ -510,12 +511,13 @@ function J = mdo_wrapper(x, objective, n_flights, total_payload, penalty)
     if payload_per_ac > 200000   % kg — above A350F max payload, penalise
         J = penalty; return;
     end
-    if payload_per_ac < 50000    % too small to be a freighter, penalise  
+    if payload_per_ac < 90000    % too small to be a freighter, penalise  
         J = penalty; return;
     end
     if N_fleet < 3 || N_fleet > 20
         J = penalty; return;
     end
+    
     % MTOM/payload ratio sanity check (should be 2.5–4.5 for freighters)
     % mtom_ratio = ADP.MTOM / payload_per_ac;
     % if mtom_ratio < 2.0 || mtom_ratio > 5.5

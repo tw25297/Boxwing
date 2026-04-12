@@ -1,0 +1,145 @@
+function [season, per_leg] = Missionanalysisallflights(ADP, fleet_size, SAF_ratio)
+%  Calls MissionAnalysisPM to get the leg schedule, then calls
+%  MissionAnalysisRefined for each sub-leg (accounting for refuel stops
+%  on very long legs). Aggregates total seasonal fuel and climate inputs.
+
+%  INTEGRATION PATTERN:
+%    - For DOC: use season.TotalBlockFuel and season.TotalLandings
+%    - For climate: use season.TotalBlockFuel (broken down by segment type
+%      if needed via per_leg(i).detail)
+%    - For block fuel per design mission: continue to call
+%      MissionAnalysisRefined(ADP, ADP.TLAR.Range) directly in Size.m
+
+%  NOTE ON REFUEL STOPS:
+%    Long legs (e.g. LHR→MEL at 16,847 km) exceed the aircraft's design
+%    range. MissionAnalysisPM determines how many refuel stops are needed.
+%    This function runs MissionAnalysisRefined once per sub-leg, treating
+%    each refuel as a fresh start at MTOM (payload fixed, full fuel reload).
+
+if nargin < 3
+    SAF_ratio = 0;
+end
+
+%% Schedule from MissionAnalysisPM 
+target_range_km = ADP.TLAR.Range / 1000;   % design range [km]
+sched = Boxwing.script.MissionAnalysis.MissionAnalysisPM(fleet_size, ADP.TLAR.M_c, ADP.TLAR.Alt_cruise, ADP.MTOM, target_range_km);
+n_legs = numel(sched);
+
+% Per-leg loop
+per_leg(n_legs) = struct('label', '', 'dist_km', 0, 'is_empty', false, ...
+    'n_subLegs', 0, 'BlockFuel_kg', 0, 'TripFuel_kg', 0, ...
+    'ResFuel_kg', 0, 'time_hr', 0, 'n_landings', 0, 'detail', []);
+
+total_block_fuel = 0;
+total_trip_fuel  = 0;
+total_landings   = 0;
+total_time_hr    = 0;
+
+for i = 1:n_legs
+    leg = sched(i);
+
+    % Payload per aircraft for this leg [kg]
+    if leg.is_empty
+        m_payload = 0;
+    else
+        m_payload = leg.payload_t * 1000;   % tonnes → kg
+    end
+
+    % Sub-leg range: split if refuel stops required
+    n_stops   = leg.num_refuel_stops;
+    n_sublegs = n_stops + 1;
+    leg_dist_m = leg.dist_km * 1e3;
+    sub_range_m = leg_dist_m / n_sublegs;
+
+    % Effective MTOM for this leg (OEM + payload + full fuel)
+    % Size.m has already converged MTOM; we use it as the starting mass.
+    % If payload is zero (empty ferry) the actual take-off mass is lower.
+    if m_payload < ADP.TLAR.Payload
+        % Scale MTOM proportionally (OEM + payload + proportional fuel)
+        frac     = max(m_payload / ADP.TLAR.Payload, 0);
+        M_TO_leg = ADP.OEM + m_payload + frac * (ADP.MTOM - ADP.OEM - ADP.TLAR.Payload);
+        M_TO_leg = clamp(M_TO_leg, ADP.OEM, ADP.MTOM);
+    else
+        M_TO_leg = ADP.MTOM;
+    end
+
+    leg_block   = 0;
+    leg_trip    = 0;
+    leg_res     = 0;
+    leg_time    = 0;
+    leg_details = cell(n_sublegs, 1);
+
+    for s = 1:n_sublegs
+        try
+            [BF, TF, RF, ~, MT, ~, det] = Boxwing.script.MissionAnalysis.MissionAnalysisRefined(ADP, sub_range_m, M_TO_leg);
+            leg_block = leg_block + BF;
+            leg_trip  = leg_trip  + TF;
+            leg_res   = leg_res   + RF;
+            leg_time  = leg_time  + MT / 3600;
+            leg_details{s} = det;
+        catch ME
+            warning('MissionAnalysisAllFlights:legFailed','Leg %d sub-leg %d failed: %s', i, s, ME.message);
+            leg_block = leg_block + ADP.MTOM * 0.25;   % fallback: 25% MTOM
+        end
+    end
+
+    % Multiply by fleet_size (all aircraft fly this leg)
+    per_leg(i).label        = leg.label;
+    per_leg(i).dist_km      = leg.dist_km;
+    per_leg(i).is_empty     = leg.is_empty;
+    per_leg(i).n_subLegs    = n_sublegs;
+    per_leg(i).BlockFuel_kg = leg_block * fleet_size;
+    per_leg(i).TripFuel_kg  = leg_trip  * fleet_size;
+    per_leg(i).ResFuel_kg   = leg_res   * fleet_size;
+    per_leg(i).time_hr      = leg_time;
+    per_leg(i).n_landings   = leg.num_landings * fleet_size;
+    per_leg(i).detail       = leg_details;
+
+    total_block_fuel = total_block_fuel + per_leg(i).BlockFuel_kg;
+    total_trip_fuel  = total_trip_fuel  + per_leg(i).TripFuel_kg;
+    total_landings   = total_landings   + per_leg(i).n_landings;
+    total_time_hr    = total_time_hr    + per_leg(i).time_hr * fleet_size;
+end
+
+%% Seasonal totals
+season.TotalBlockFuel_kg  = total_block_fuel;
+season.TotalTripFuel_kg   = total_trip_fuel;
+season.TotalLandings      = total_landings;
+season.TotalFlightTime_hr = total_time_hr;
+season.FleetSize          = fleet_size;
+season.SAF_ratio          = SAF_ratio;
+
+% Effective block fuel for DOC (what gets purchased at the pump)
+season.FuelPurchased_kg   = total_block_fuel;   % conservative: buy block fuel
+
+% Climate-relevant quantities
+EI_CO2 = 3.16;   % kg CO2 per kg fuel
+season.CO2_kg = total_block_fuel * EI_CO2 * (1 - SAF_ratio * 0.80);
+%   SAF lifecycle CO2 saving assumed 80% vs Jet-A (conservative literature value)
+
+fprintf('\n══════════════════════════════════════════════════════\n');
+fprintf('  SEASONAL MISSION ANALYSIS (fleet = %d aircraft)\n', fleet_size);
+fprintf('══════════════════════════════════════════════════════\n');
+fprintf('  Total block fuel    : %10.0f kg  (%6.1f t)\n', ...
+        season.TotalBlockFuel_kg, season.TotalBlockFuel_kg/1e3);
+fprintf('  Total landings      : %10d\n', season.TotalLandings);
+fprintf('  Total flight time   : %10.1f hr\n', season.TotalFlightTime_hr);
+fprintf('  Total CO2 (net)     : %10.0f kg  (%6.1f t)\n', ...
+        season.CO2_kg, season.CO2_kg/1e3);
+fprintf('──────────────────────────────────────────────────────\n');
+fprintf('  %-40s  %8s\n', 'Leg', 'Fuel (t)');
+fprintf('  %-40s  %8s\n', repmat('-',1,40), '--------');
+for i = 1:n_legs
+    empty_tag = '';
+    if per_leg(i).is_empty; empty_tag = ' [empty]'; end
+    fprintf('  %-40s  %8.1f%s\n', per_leg(i).label(1:min(40,end)), ...
+            per_leg(i).BlockFuel_kg/1e3, empty_tag);
+end
+fprintf('══════════════════════════════════════════════════════\n\n');
+
+end
+
+
+function v = clamp(v, lo, hi)
+    v = max(lo, min(hi, v));
+end

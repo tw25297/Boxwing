@@ -95,6 +95,7 @@ classdef ADP < handle
     % Names used by shared cast / sizing code
     properties
         Thrust   = 0;
+        T_Static = 500; % kN
         WingArea = 358.8;   % [m^2] = TotalLiftingArea, updated each iter
         Span     = 59.9;    % [m]   = EffectiveSpan
         WingPos  = 0;
