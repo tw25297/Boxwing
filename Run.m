@@ -1,21 +1,16 @@
 %% BOXWING FREIGHTER — COMPLETE SIZING AND ANALYSIS
-%  All five fixes applied:
-%
-%  FIX 1 — CD0.m:  getCf fzero guarded against non-finite endpoints.
-%           → DragMeta breakdown now works.
-%
-%  FIX 2 — multiPhasePolar.m: cast.atmos → Boxwing.cast.atmos
-%           → "Dot indexing" error resolved.
-%
-%  FIX 3 — liftDistribution.m: BoxWing.cast.atmos → Boxwing.cast.atmos
-%           → "Unable to resolve BoxWing.cast.atmos" resolved.
-%
-%  FIX 4 — ADP.m / freshADP: c_ref_fixed held constant across trade sweep
-%           so WingArea = b_eff * c_ref (linear in span), not b²/AR (quadratic).
-%           AR now varies 6.7–10 across 40–60 m, revealing a genuine optimum.
-%
-%  FIX 5 — Figures saved immediately after each plot block.
-%           → "Invalid graphics object" saveas crash at end eliminated.
+%  Fixes applied:
+%    1. Boxwing.ADP()           -> Boxwing.B777.ADP()
+%    2. Boxwing.Size()          -> Boxwing.B777.Size()
+%    3. Boxwing.BuildGeometry() -> Boxwing.B777.BuildGeometry()
+%    4. Boxwing.UpdateAero()    -> Boxwing.B777.UpdateAero()
+%    5. Boxwing.MissionAnalysis()-> Boxwing.B777.MissionAnalysis()
+%    6. cast.TLAR.Boxwing()     -> Boxwing.cast.TLAR.Boxwing()
+%    7. cast.draw()             -> Boxwing.cast.draw()
+%    8. ADP (handle class) — trade loop uses proper deep-copy via freshADP()
+%    9. Engine object with T_ref/D_ref/L_ref/M_ref baselines + TSFC
+%       (Rubberise now handled inline in engine.m — no method needed)
+%   10. Boxwing.cast.eng.Fuel.JA1.Density replaced with inline constant
 
 clear; clc; close all;
 
@@ -28,12 +23,15 @@ projectRoot = pwd;
 addpath(projectRoot);
 clear classes;
 
-SI.ft    = 3.28084;
-SI.Nmile = 1 / 1852;
-SI.knt   = 1 / 0.5144;
-SI.min   = 1 / 60;
-SI.lb    = 2.20462;
-SI.litre = 1000;
+% SI conversion factors (stored in base workspace for use by TLAR and geom files)
+% Convention: dividing imperial value BY factor gives SI (metres, m/s, etc.)
+% Multiplying stored SI value BY factor converts back for display.
+SI.ft    = 3.28084;      % ft/m
+SI.Nmile = 1 / 1852;    % NM/m   (Range*SI.Nmile gives NM)
+SI.knt   = 1 / 0.5144;  % kts/(m/s)
+SI.min   = 1 / 60;      % min/s
+SI.lb    = 2.20462;     % lb/kg  (Raymer mass formulas)
+SI.litre = 1000;        % L/m^3
 SI.km    = 1e-3;
 SI.hr    = 1 / 3600;
 assignin('base', 'SI', SI);
@@ -43,68 +41,54 @@ assignin('base', 'SI', SI);
 %  PART 1 — BASELINE SIZING
 %% ═══════════════════════════════════════════════════════════════════════
 
+%% Instantiate Boxwing ADP and set TLAR
 ADP      = Boxwing.B777.ADP();
 ADP.TLAR = Boxwing.cast.TLAR.Boxwing();
-ADP.Engine = GE90Engine();
+ADP.Engine = GE90Engine();   % engine baseline data + TSFC (scaling done in engine.m)
 
+%% Set boxwing-specific parameters
+% Fuselage geometry
 ADP.CockpitLength = 6.5;
 ADP.CabinRadius   = 2.93;
 ADP.CabinLength   = 70.0 - ADP.CockpitLength - ADP.CabinRadius*2*1.48;
 
 L_f = ADP.CockpitLength + ADP.CabinLength + ADP.CabinRadius*1.48;
-% NOTE: FrontWingPos and RearWingPos are computed inside updateDerivedProps
-%       (0.40*L_f and 0.75*L_f). Do NOT set them here — they would be
-%       immediately overwritten by the updateDerivedProps call below.
+ADP.FrontWingPos = 0.40 * L_f;
+ADP.RearWingPos  = 0.75 * L_f;
 
+% Boxwing configuration (no conventional horizontal tail)
 ADP.V_HT = 0;
 ADP.V_VT = 0.05;
 
-ADP.FrontWingSpan   = 60;
-ADP.RearWingSpan    = 50;
-ADP.ConnectorHeight = 3;
+%% Set hyperparameters (design variables)
+ADP.FrontWingSpan = 60;   % [m]
+ADP.RearWingSpan  = 50;   % [m]
+ADP.ConnectorHeight = 3;  % [m] vertical gap between wings
 
 ADP.updateDerivedProps();
 
+%% Class-I estimates (initial guesses)
 ADP.MTOM    = 3.0 * ADP.TLAR.Payload;
 ADP.Mf_Fuel = 0.28;
 ADP.Mf_res  = 0.04;
 ADP.Mf_Ldg  = 0.75;
 ADP.Mf_TOC  = 0.98;
 
+%% Initialize aerodynamic polar
 Boxwing.B777.UpdateAero(ADP);
 
-%% Sizing loop
+%% CD0 drag breakdown using DragMeta
 fprintf('═══════════════════════════════════════════════════════════\n');
-fprintf('   BASELINE SIZING (Span = %.0f m)\n', ADP.FrontWingSpan);
-fprintf('═══════════════════════════════════════════════════════════\n\n');
-
-[ADP, sizing_out] = Boxwing.B777.Size(ADP);
-
-%% Build final geometry
-[BoxGeom, BoxMass] = Boxwing.B777.BuildGeometry(ADP);
-
-%% FIX 2: Write back converged CL_cruise AFTER BuildGeometry so nothing
-%  can overwrite it. liftDistribution reads this to get a physical CL (~0.73).
-[rho_cr_post, a_cr_post] = Boxwing.cast.atmos(ADP.TLAR.Alt_cruise);
-q_cr_post = 0.5 * rho_cr_post * (ADP.TLAR.M_c * a_cr_post)^2;
-ADP.CL_cruise = (ADP.MTOM * 9.81 * ADP.Mf_TOC) / (q_cr_post * ADP.WingArea);
-
-%% FIX 1: CD0 breakdown now runs AFTER sizing with converged geometry
-%  (pre-sizing it used ADP defaults: c_ref=5.5m, large CD0=0.0186).
-fprintf('═══════════════════════════════════════════════════════════\n');
-fprintf('   CD0 DRAG BREAKDOWN (DragMeta) — converged geometry\n');
+fprintf('   CD0 DRAG BREAKDOWN (DragMeta)\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
 try
-    [CD0_val, cd0_breakdown] = Boxwing.B777.CD0(ADP, [], true);
-    componentNames = {'Wing','Fuselage','Nacelles','HTP','VTP','Tail','Misc'};
+    [CD0_val, cd0_breakdown] = Boxwing.B777.CD0(ADP);
+    componentNames = {'Wing', 'Fuselage', 'Nacelles', 'HTP', 'VTP', 'Tail', 'Misc'};
     componentVals  = [cd0_breakdown.CD0_wing, cd0_breakdown.CD0_fuse, cd0_breakdown.CD0_nac, ...
                       cd0_breakdown.CD0_HTP,  cd0_breakdown.CD0_VTP,  cd0_breakdown.CD0_tail, ...
                       cd0_breakdown.CD0_misc];
-    dragItems = Boxwing.cast.DragMeta(componentNames{1}, componentVals(1));
-    for k = 2:length(componentNames)
-        dragItems(k) = Boxwing.cast.DragMeta(componentNames{k}, componentVals(k));
-    end
+    dragItems = Boxwing.cast.DragMeta(componentNames, componentVals);
     fprintf('  %-12s  CD0 (counts x10^4)\n', 'Component');
     fprintf('  %s\n', repmat('-',1,35));
     for k = 1:length(dragItems)
@@ -115,6 +99,16 @@ try
 catch ME
     fprintf('  [SKIP] DragMeta breakdown: %s\n\n', ME.message);
 end
+
+%% Sizing loop
+fprintf('═══════════════════════════════════════════════════════════\n');
+fprintf('   BASELINE SIZING (Span = %.0f m)\n', ADP.FrontWingSpan);
+fprintf('═══════════════════════════════════════════════════════════\n\n');
+
+[ADP, sizing_out] = Boxwing.B777.Size(ADP);
+
+%% Build final geometry
+[BoxGeom, BoxMass] = Boxwing.B777.BuildGeometry(ADP);
 
 %% Print key results
 fprintf('\n╔════════════════════════════════════════════════════════════╗\n');
@@ -163,10 +157,6 @@ title(sprintf('Boxwing Freighter — Top View  |  MTOM=%.0f t  |  Fuel=%.0f t  |
       ADP.MTOM/1e3, sizing_out.BlockFuel/1e3, ADP.EffectiveSpan), 'FontSize', 14);
 ylim([-0.55 0.55] * ADP.EffectiveSpan);
 
-% FIX 5: save immediately after figure is complete
-saveas(figure(1), 'Boxwing_Geometry.png');
-fprintf('  Saved: Boxwing_Geometry.png\n\n');
-
 
 %% ═══════════════════════════════════════════════════════════════════════
 %  PART 3 — MASS BREAKDOWN
@@ -204,10 +194,7 @@ title(sprintf('Boxwing — Component Mass Breakdown  |  OEM=%.0ft  Fuel=%.0ft  P
       ADP.OEM/1e3, sizing_out.BlockFuel/1e3, ADP.TLAR.Payload/1e3), 'FontSize', 12);
 grid on;
 xlim([0 max(allMass)*1.15]);
-
-% FIX 5: save immediately
-saveas(figure(2), 'Boxwing_MassBreakdown.png');
-fprintf('  Saved: Boxwing_MassBreakdown.png\n\n');
+legend({'Structure','Systems','Fuel','Payload'}, 'Location', 'southeast');
 
 
 %% ═══════════════════════════════════════════════════════════════════════
@@ -217,10 +204,17 @@ fprintf('  Saved: Boxwing_MassBreakdown.png\n\n');
 fprintf('═══════════════════════════════════════════════════════════\n');
 fprintf('   MISSION ANALYSIS\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
-
+SAF_ratio = 1;
+fleet_size = ceil(736e3 / ADP.TLAR.Payload);
 [BlockFuel, TripFuel, ResFuel, Mf_TOC, MissionTime, cruise_FL, detail] = ...
     Boxwing.script.MissionAnalysis.MissionAnalysisRefined(ADP, ADP.TLAR.Range, ADP.MTOM);
-[season, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, ceil(736e3 / ADP.TLAR.Payload), 1);
+[season, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, fleet_size, SAF_ratio);
+
+opts_plot.fleet_size = fleet_size;
+opts_plot.SAF_ratio  = SAF_ratio;
+opts_plot.n_sens     = 7;       % points per sensitivity sweep
+opts_plot.save_figs  = true;
+% PlotMissionAndSensitivity(ADP, season, per_leg, sizing_out, opts_plot);
 
 
 fprintf('Design Range:    %.0f NM\n',  ADP.TLAR.Range * SI.Nmile);
@@ -228,11 +222,12 @@ fprintf('Trip Fuel:       %.1f t\n',   TripFuel/1e3);
 fprintf('Reserve Fuel:    %.1f t\n',   ResFuel/1e3);
 fprintf('Block Fuel:      %.1f t\n',   BlockFuel/1e3);
 fprintf('Mission Time:    %.1f hr\n',  MissionTime/3600);
-fprintf('Cruise FL:       FL%.0f\n\n', cruise_FL);
+fprintf('Cruise FL:       FL%.0f\n',   cruise_FL);
+fprintf('\n');
 
 
 %% =======================================================================
-%  PART 5 — CONSTRAINT ANALYSIS
+%  PART 5 - CONSTRAINT ANALYSIS (T/W vs W/S diagram)
 %% =======================================================================
 
 fprintf('===========================================================\n');
@@ -246,12 +241,10 @@ fprintf('Constraint design point:\n');
 fprintf('  T/W (SLS) = %.4f\n', TW_design);
 fprintf('  W/S       = %.0f N/m2\n\n', WS_design);
 saveas(figure(4), 'Boxwing_ConstraintDiagram.png');
-fprintf('  Saved: Boxwing_ConstraintDiagram.png\n\n');
 
 
 %% =======================================================================
-%  PART 6 — MULTI-PHASE DRAG POLAR
-%  FIX 2: multiPhasePolar.m now uses Boxwing.cast.atmos (full path)
+%  PART 6 - MULTI-PHASE DRAG POLAR
 %% =======================================================================
 
 fprintf('===========================================================\n');
@@ -261,17 +254,24 @@ fprintf('===========================================================\n\n');
 try
     polars = Boxwing.B777.multiPhasePolar(ADP, BoxGeom);
     fprintf('  Drag polars computed.\n');
+    phases = fieldnames(polars);
+    for k = 1:length(phases)
+        p = polars.(phases{k});
+        if isstruct(p) && isfield(p,'CD0')
+            fprintf('  %-12s  CD0 = %.4f\n', phases{k}, p.CD0);
+        end
+    end
     figure(5); clf;
     set(gcf, 'Color', 'w', 'Position', [100 100 800 600]);
     CL_vec = linspace(0, 1.8, 200);
     hold on; grid on;
-    phase_colors = lines(length(polars));
-    for k = 1:length(polars)
-        p = polars(k);
-        if isfield(p,'CD') && isa(p.CD,'function_handle')
+    phase_colors = lines(length(phases));
+    for k = 1:length(phases)
+        p = polars.(phases{k});
+        if isstruct(p) && isfield(p,'CD') && isa(p.CD,'function_handle')
             CD_vec = arrayfun(p.CD, CL_vec);
             plot(CD_vec, CL_vec, 'LineWidth', 2, 'Color', phase_colors(k,:), ...
-                 'DisplayName', p.name);
+                 'DisplayName', phases{k});
         end
     end
     xlabel('C_D','FontSize',12); ylabel('C_L','FontSize',12);
@@ -286,8 +286,7 @@ end
 
 
 %% =======================================================================
-%  PART 7 — LIFT DISTRIBUTION
-%  FIX 3: liftDistribution.m now uses Boxwing.cast.atmos (lowercase w)
+%  PART 7 - LIFT DISTRIBUTION
 %% =======================================================================
 
 fprintf('===========================================================\n');
@@ -298,8 +297,9 @@ try
     figure(6); clf;
     set(gcf, 'Color', 'w', 'Position', [100 100 900 600]);
     dist = Boxwing.B777.liftDistribution(ADP);
-    fprintf('  Spanwise lift distribution computed and plotted.\n');
-    fprintf('  Saved: Boxwing_LiftDistribution.png\n\n');  % saved inside liftDistribution
+    fprintf('  Spanwise lift distribution computed and plotted.\n\n');
+    saveas(figure(6), 'Boxwing_LiftDistribution.png');
+    fprintf('  Saved: Boxwing_LiftDistribution.png\n\n');
 catch ME
     fprintf('  [SKIP] LiftDistribution: %s\n\n', ME.message);
     dist = [];
@@ -307,7 +307,7 @@ end
 
 
 %% =======================================================================
-%  PART 8 — STRUCTURAL SIZING
+%  PART 8 - STRUCTURAL SIZING (Beam Properties + Cap Sizing)
 %% =======================================================================
 
 fprintf('===========================================================\n');
@@ -315,16 +315,20 @@ fprintf('   STRUCTURAL SIZING -- BEAM PROPERTIES\n');
 fprintf('===========================================================\n\n');
 
 try
-    E_CFRP   = 70e9;
+    E_CFRP   = 70e9;   % [Pa]  CFRP Young's modulus
+    % Use atmosT (temperature-only, faster) to get cruise temperature for
+    % thermal expansion reference — full atmos() used elsewhere for rho/a
     T_cruise = Boxwing.cast.atmosT(ADP.TLAR.Alt_cruise);
-    fprintf('  Cruise temperature: %.1f K  (%.1f °C)\n', T_cruise, T_cruise - 273.15);
-    I_front  = 0.08;
-    I_rear   = 0.06;
+    fprintf('  Cruise temperature (atmosT): %.1f K  (%.1f °C)\n', T_cruise, T_cruise - 273.15);
+    I_front  = 0.08;   % [m^4] front wing box second moment of area
+    I_rear   = 0.06;   % [m^4] rear wing box second moment of area
+    lift_split_front = ADP.etaLift;
+    lift_split_rear  = 1 - ADP.etaLift;
 
-    front_beam = Boxwing.B777.beamproperties(ADP, 'Front Wing', ADP.etaLift,     E_CFRP, I_front);
-    rear_beam  = Boxwing.B777.beamproperties(ADP, 'Rear Wing',  1-ADP.etaLift,   E_CFRP, I_rear);
+    front_beam = Boxwing.B777.beamproperties(ADP, 'Front Wing', lift_split_front, E_CFRP, I_front);
+    rear_beam  = Boxwing.B777.beamproperties(ADP, 'Rear Wing',  lift_split_rear,  E_CFRP, I_rear);
 
-    n_limit    = 2.5;
+    n_limit    = 2.5;  % limit load factor
     front_beam = front_beam.calcTriangularLoad(n_limit);
     rear_beam  = rear_beam.calcTriangularLoad(n_limit);
     front_beam = front_beam.reactionLoads();
@@ -333,6 +337,7 @@ try
     fprintf('  Front wing:\n'); front_beam.printSummary();
     fprintf('\n  Rear wing:\n');  rear_beam.printSummary();
 
+    % Cap sizing via structures_calculations
     sigma_allow = 400e6;
     h_box = 0.12 * ADP.TotalLiftingArea / ADP.Span;
     b_cap = 0.40 * h_box;
@@ -365,11 +370,12 @@ try
     fprintf('  Saved: Boxwing_StructuralSizing.png\n\n');
 catch ME
     fprintf('  [SKIP] Structural sizing: %s\n\n', ME.message);
+    front_beam = []; rear_beam = [];
 end
 
 
 %% =======================================================================
-%  PART 9 — DIRECT OPERATING COST (DOC)
+%  PART 9 - DIRECT OPERATING COST (DOC)
 %% =======================================================================
 
 fprintf('===========================================================\n');
@@ -377,23 +383,23 @@ fprintf('   DIRECT OPERATING COST (DOC)\n');
 fprintf('===========================================================\n\n');
 
 fleet_size = 10;  SAF_ratio = 0.0;  T_max_K = 1850;
-try
-    [DOC_total, docBreakdown, ~, total_init, ~, ~] = Boxwing.script.DOC( ...
-        ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
-        fleet_size, SAF_ratio, ADP.TLAR.M_c, T_max_K);
-    fprintf('  Fleet=%d  SAF=%.0f%%\n\n  DOC Breakdown:\n', fleet_size, SAF_ratio*100);
-    dfields = fieldnames(docBreakdown);
-    for k = 1:length(dfields)
-        if ~strcmp(dfields{k},'total')
-            fprintf('    %-18s  $ %14.0f\n', dfields{k}, docBreakdown.(dfields{k}));
-        end
+[DOC_total, docBreakdown, ~, total_init, ~, ~] = Boxwing.script.DOC( ...
+    ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
+    fleet_size, SAF_ratio, ADP.TLAR.M_c, T_max_K);
+fprintf('  Fleet=%d  SAF=%.0f%%\n\n  DOC Breakdown:\n', fleet_size, SAF_ratio*100);
+dfields = fieldnames(docBreakdown);
+for k = 1:length(dfields)
+    if ~strcmp(dfields{k},'total')
+        fprintf('    %-18s  $ %14.0f\n', dfields{k}, docBreakdown.(dfields{k}));
     end
-    fprintf('    ------------------------------------------\n');
-    fprintf('    %-18s  $ %14.0f\n', 'TOTAL DOC', docBreakdown.total);
-    fprintf('\n  Total programme cost : $ %.2f B\n\n', total_init/1e9);
-catch ME
-    fprintf('  [SKIP] DOC: %s\n\n', ME.message);
 end
+fprintf('    ------------------------------------------\n');
+fprintf('    %-18s  $ %14.0f\n', 'TOTAL DOC', docBreakdown.total);
+
+fprintf('\n  Total programme cost : $ %.2f B\n\n', total_init/1e9);
+
+
+
 
 
 %% ═══════════════════════════════════════════════════════════════════════
@@ -404,14 +410,25 @@ fprintf('═══════════════════════�
 fprintf('   PAYLOAD-RANGE: UltraFan vs GE90-115B\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
+%  Breguet-based payload-range sweep for both engine options.
+%  Aircraft geometry fixed (MTOM, OEM, WingArea, LD all from sizing).
+%  Fuel capacity capped at 165t (5-tank geometry limit from analysis).
+%
+%  Convention:
+%    Point A — max payload (140t),  fuel fills remaining MTOM margin
+%    Point B — payload reduced, full fuel tanks (165t cap)
+%    Point C — ferry range, zero payload, full tanks
+
 g_pa        = 9.81;
-V_cr_pa     = ADP.TLAR.M_c * 295.0;
-LD_cr_pa    = ADP.LD_c;
-fuel_cap_pa = 165000;
+V_cr_pa     = ADP.TLAR.M_c * 295.0;      % cruise TAS [m/s] at FL390
+LD_cr_pa    = ADP.LD_c;                   % L/D from sizing
+fuel_cap_pa = 165000;                     % [kg] total tank capacity
 OEM_pa      = ADP.OEM;
 MTOM_pa     = ADP.MTOM;
 Payload_max = ADP.TLAR.Payload;
-alt_cr_pa   = ADP.TLAR.Alt_cruise;
+
+% ── TSFC functions ───────────────────────────────────────────────────
+alt_cr_pa = ADP.TLAR.Alt_cruise;
 
 tsfc_ge90_fn = @(M, h) max(0.0158e-3 ...
     * ((288.15-0.0065*min(h,11000))/288.15)^(-0.5) ...
@@ -419,119 +436,137 @@ tsfc_ge90_fn = @(M, h) max(0.0158e-3 ...
 
 tsfc_uf_fn = @(M, h) ultraFanTSFC(M, h);
 
+function tsfc = ultraFanTSFC(Mach, alt_m)
+    BPR    = 15;
+    SFC_TO = 18 * exp(-0.12*BPR) * 1e-6;
+    SFC_cr = 22 * exp(-0.05*BPR) * 1e-6;
+    T      = max(288.15 - 0.0065*min(alt_m,11000), 216.65);
+    sr     = sqrt(T/288.15);
+    SFC_B  = (SFC_cr/sr - SFC_TO) / 0.82;
+    tsfc   = max((SFC_TO + SFC_B*Mach)*sr, 1e-6);
+end
+
+% ── Breguet range ────────────────────────────────────────────────────
 breguet_R = @(W_start, trip_fuel, tsfc) ...
     (V_cr_pa * LD_cr_pa) / (g_pa * tsfc) ...
     * log(max(W_start ./ max(W_start - trip_fuel, 1), 1+1e-9));
 
+% ── Payload sweep ────────────────────────────────────────────────────
+payloads_pa = linspace(Payload_max, 0, 60);   % [kg]
+
+range_ge90 = zeros(size(payloads_pa));
+range_uf   = zeros(size(payloads_pa));
+fuels_pa   = zeros(size(payloads_pa));
+
 TSFC_ge = tsfc_ge90_fn(ADP.TLAR.M_c, alt_cr_pa);
 TSFC_uf = tsfc_uf_fn(ADP.TLAR.M_c,   alt_cr_pa);
 
-% ── Three-segment payload-range ─────────────────────────────────────────
-% Point A: max payload, fuel fills remaining MTOM margin (MTOM-limited)
-% Point B: payload reduced until full tanks (fuel-cap-limited knee)
-% Point C: ferry, zero payload, full tanks
+for k = 1:length(payloads_pa)
+    pld = payloads_pa(k);
+    fuel_avail  = min(MTOM_pa - OEM_pa - pld, fuel_cap_pa);
+    fuel_avail  = max(fuel_avail, 0);
+    trip_fuel   = fuel_avail * 0.94;   % reserve = 6% of block
+    W_start     = OEM_pa + pld + fuel_avail;
+    fuels_pa(k) = fuel_avail;
 
-fuel_at_maxpld = max(min(MTOM_pa - OEM_pa - Payload_max, fuel_cap_pa), 0);
-
-% Point A
-pld_A  = Payload_max;
-fuel_A = fuel_at_maxpld;
-W_A    = OEM_pa + pld_A + fuel_A;
-range_A_ge = breguet_R(W_A, fuel_A*0.94, TSFC_ge) / 1852;
-range_A_uf = breguet_R(W_A, fuel_A*0.94, TSFC_uf) / 1852;
-
-% Point B: payload where MTOM - OEM - pld = fuel_cap (knee point)
-pld_B  = max(MTOM_pa - OEM_pa - fuel_cap_pa, 0);
-fuel_B = fuel_cap_pa;
-W_B    = OEM_pa + pld_B + fuel_B;
-range_B_ge = breguet_R(W_B, fuel_B*0.94, TSFC_ge) / 1852;
-range_B_uf = breguet_R(W_B, fuel_B*0.94, TSFC_uf) / 1852;
-
-% Segment B→C: payload sweeps 0, fuel stays at cap
-payloads_BC = linspace(pld_B, 0, 80);
-range_ge_BC = zeros(size(payloads_BC));
-range_uf_BC = zeros(size(payloads_BC));
-for k = 1:length(payloads_BC)
-    pld  = payloads_BC(k);
-    fuel = min(fuel_cap_pa, max(MTOM_pa - OEM_pa - pld, 0));
-    W_s  = OEM_pa + pld + fuel;
-    range_ge_BC(k) = breguet_R(W_s, fuel*0.94, TSFC_ge) / 1852;
-    range_uf_BC(k) = breguet_R(W_s, fuel*0.94, TSFC_uf) / 1852;
+    range_ge90(k) = breguet_R(W_start, trip_fuel, TSFC_ge) / 1852;   % NM
+    range_uf(k)   = breguet_R(W_start, trip_fuel, TSFC_uf) / 1852;   % NM
 end
 
-% Full curves including flat top (origin → A → B → C)
-if pld_B >= Payload_max * 0.999
-    % No flat top: MTOM-limit never binding before fuel cap
-    payloads_full = payloads_BC / 1e3;
-    range_ge_full = range_ge_BC;
-    range_uf_full = range_uf_BC;
-else
-    payloads_full = [Payload_max, Payload_max, pld_B,     payloads_BC]  / 1e3;
-    range_ge_full = [0,           range_A_ge,  range_B_ge, range_ge_BC];
-    range_uf_full = [0,           range_A_uf,  range_B_uf, range_uf_BC];
-end
+% ── Key design points ────────────────────────────────────────────────
+[~, idx_maxpld] = min(abs(payloads_pa - Payload_max));
+[~, idx_halfpld]= min(abs(payloads_pa - Payload_max/2));
+[~, idx_ferry]  = min(abs(payloads_pa));
 
-fprintf('  Payload-Range key points (Breguet, LD=%.1f):\n', LD_cr_pa);
-fprintf('  %-10s  %12s  %12s\n', 'Point', 'GE90 [NM]', 'UF [NM]');
-fprintf('  %s\n', repmat('-',1,38));
-fprintf('  %-10s  %12.0f  %12.0f\n', sprintf('A(%.0ft)', pld_A/1e3), range_A_ge, range_A_uf);
-fprintf('  %-10s  %12.0f  %12.0f\n', sprintf('B(%.0ft)', pld_B/1e3), range_B_ge, range_B_uf);
-fprintf('  %-10s  %12.0f  %12.0f\n', 'C (ferry)', range_ge_BC(end), range_uf_BC(end));
+fprintf('  Payload-Range comparison (Breguet, LD=%.1f):\n', LD_cr_pa);
+fprintf('  %-12s  %10s  %10s  %8s\n', 'Payload', 'GE90 [NM]', 'UF [NM]', 'Gain');
+fprintf('  %s\n', repmat('-',1,48));
+for pld_t = [140, 100, 70, 0]
+    [~,ki] = min(abs(payloads_pa - pld_t*1000));
+    fprintf('  %-12s  %10.0f  %10.0f  %+7.0f NM (+%.0f%%)\n', ...
+        sprintf('%dt',pld_t), range_ge90(ki), range_uf(ki), ...
+        range_uf(ki)-range_ge90(ki), ...
+        (range_uf(ki)-range_ge90(ki))/max(range_ge90(ki),1)*100);
+end
 fprintf('\n');
 
+% ── Figure 14 — Payload-Range ────────────────────────────────────────
 figure(14); clf;
-set(gcf, 'Color','w', 'Position',[100 100 1050 650]);
+set(gcf, 'Color','w', 'Position',[100 100 1000 620]);
+
+% Shaded region between curves (UltraFan advantage)
+x_fill = [range_ge90, fliplr(range_uf)];
+y_fill = [payloads_pa/1e3, fliplr(payloads_pa/1e3)];
+fill(x_fill, y_fill, [0.85 0.95 0.85], 'EdgeColor','none', 'FaceAlpha',0.5, ...
+     'DisplayName','UltraFan range gain');
 hold on; grid on; box on;
 
-fill([range_ge_full, fliplr(range_uf_full)], ...
-     [payloads_full,  fliplr(payloads_full)], ...
-     [0.85 0.95 0.85], 'EdgeColor','none', 'FaceAlpha',0.5, ...
-     'DisplayName','UltraFan range gain');
+% Main curves
+plot(range_ge90, payloads_pa/1e3, 'b-',  'LineWidth', 2.5, ...
+     'DisplayName', 'GE90-115B  (BPR 8.7, 1995 tech)');
+plot(range_uf,   payloads_pa/1e3, 'r-',  'LineWidth', 2.5, ...
+     'DisplayName', 'UltraFan   (BPR 15,  ~2030 tech)');
 
-plot(range_ge_full, payloads_full, 'b-', 'LineWidth', 2.5, ...
-     'DisplayName', 'GE90-115B  (BPR 8.7)');
-plot(range_uf_full, payloads_full, 'r-', 'LineWidth', 2.5, ...
-     'DisplayName', 'UltraFan   (BPR 15)');
+% Design point markers
+plot(range_ge90(idx_maxpld), payloads_pa(idx_maxpld)/1e3, 'bs', ...
+     'MarkerSize',10, 'MarkerFaceColor','b', 'HandleVisibility','off');
+plot(range_uf(idx_maxpld),   payloads_pa(idx_maxpld)/1e3, 'rs', ...
+     'MarkerSize',10, 'MarkerFaceColor','r', 'HandleVisibility','off');
+
+% Annotations at max payload
+text(range_ge90(idx_maxpld)+80, payloads_pa(idx_maxpld)/1e3+1, ...
+     sprintf('%.0f NM', range_ge90(idx_maxpld)), ...
+     'Color','b', 'FontSize',9, 'FontWeight','bold');
+text(range_uf(idx_maxpld)+80,   payloads_pa(idx_maxpld)/1e3-3, ...
+     sprintf('%.0f NM', range_uf(idx_maxpld)), ...
+     'Color','r', 'FontSize',9, 'FontWeight','bold');
+
+% Design range reference line
 xline(ADP.TLAR.Range * SI.Nmile, 'k--', 'LineWidth', 1.5, ...
       'DisplayName', sprintf('Design range (%.0f NM)', ADP.TLAR.Range*SI.Nmile));
 
-% Label A, B, C points
-text(range_A_ge+100, Payload_max/1e3+1, sprintf('A: %.0f NM', range_A_ge), ...
-     'Color','b','FontSize',8,'FontWeight','bold');
-text(range_A_uf+100, Payload_max/1e3-3, sprintf('A: %.0f NM', range_A_uf), ...
-     'Color','r','FontSize',8,'FontWeight','bold');
-if pld_B < Payload_max * 0.999
-    text(range_B_ge-200, pld_B/1e3+3, sprintf('B: %.0f NM', range_B_ge), ...
-         'Color','b','FontSize',8);
-    text(range_B_uf+100, pld_B/1e3-3, sprintf('B: %.0f NM', range_B_uf), ...
-         'Color','r','FontSize',8);
-end
+% Gain annotation box
+mid_idx = round(length(payloads_pa)/2);
+x_mid   = (range_ge90(mid_idx) + range_uf(mid_idx)) / 2;
+y_mid   = payloads_pa(mid_idx)/1e3;
+gain_pct = (range_uf(mid_idx) - range_ge90(mid_idx)) / range_ge90(mid_idx) * 100;
+text(x_mid, y_mid, sprintf('+%.0f%% range\nfrom UltraFan', gain_pct), ...
+     'HorizontalAlignment','center', 'FontSize',10, ...
+     'Color',[0.1 0.5 0.1], 'FontWeight','bold', 'BackgroundColor','w');
 
-xlabel('Range  [NM]',       'FontSize',13,'FontWeight','bold');
-ylabel('Payload  [tonnes]', 'FontSize',13,'FontWeight','bold');
+% Fuel capacity line — max range at zero payload
+plot([range_ge90(end) range_ge90(end)], [0 5], 'b:', 'LineWidth',1.2, 'HandleVisibility','off');
+plot([range_uf(end)   range_uf(end)],   [0 5], 'r:', 'LineWidth',1.2, 'HandleVisibility','off');
+text(range_ge90(end), 7, sprintf('Ferry\n%.0f NM', range_ge90(end)), ...
+     'Color','b', 'FontSize',8, 'HorizontalAlignment','center');
+text(range_uf(end),   7, sprintf('Ferry\n%.0f NM', range_uf(end)), ...
+     'Color','r', 'FontSize',8, 'HorizontalAlignment','center');
+
+xlabel('Range  [NM]',           'FontSize',13, 'FontWeight','bold');
+ylabel('Payload  [tonnes]',     'FontSize',13, 'FontWeight','bold');
 title(sprintf(['Boxwing Freighter — Payload-Range Diagram\n' ...
-               'MTOM=%.0ft  |  OEM=%.0ft  |  MaxFuel=%.0ft  |  L/D=%.1f'], ...
+               'MTOM=%.0ft  |  OEM=%.0ft  |  Max Fuel=%.0ft  |  L/D=%.1f'], ...
     MTOM_pa/1e3, OEM_pa/1e3, fuel_cap_pa/1e3, LD_cr_pa), ...
-    'FontSize',11,'FontWeight','bold');
-legend('Location','northeast','FontSize',10);
-xlim([0, max(range_uf_BC)*1.05]);
+    'FontSize',12, 'FontWeight','bold');
+
+legend('Location','northeast', 'FontSize',10);
+xlim([0, max(range_uf)*1.05]);
 ylim([0, Payload_max/1e3 * 1.15]);
-xticks(0:1000:ceil(max(range_uf_BC)/1000)*1000);
+xticks(0:1000:ceil(max(range_uf)/1000)*1000);
+
 saveas(figure(14), 'Boxwing_PayloadRange.png');
 fprintf('  Saved: Boxwing_PayloadRange.png\n\n');
 
 
 %% ═══════════════════════════════════════════════════════════════════════
 %  PART 11 — TRADE STUDY: SPAN vs MTOM & FUEL
-%  FIX 4: freshADP uses fixed mean chord so AR varies naturally with span,
-%  revealing a genuine aerodynamic optimum in the trade study.
 %% ═══════════════════════════════════════════════════════════════════════
 
 fprintf('═══════════════════════════════════════════════════════════\n');
 fprintf('   TRADE STUDY: Wing Span Sweep\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
-Spans = 40:2:70;
+Spans = 40:2:60;   % [m] front-wing span range
 
 mtoms = zeros(size(Spans));
 fuels = zeros(size(Spans));
@@ -544,26 +579,33 @@ fprintf('Testing %d span configurations from %.0f m to %.0f m...\n', ...
 
 for i = 1:length(Spans)
     fprintf('  [%2d/%2d] Span = %.0f m ... ', i, length(Spans), Spans(i));
+
+    % Deep-copy baseline ADP for each iteration (ADP is a handle class)
     ADPi = freshADP(Spans(i), SI);
+
     try
-        ADPi = Boxwing.B777.Size(ADPi, false);
+        ADPi = Boxwing.B777.Size(ADPi, false);   % silent sizing
+
         mtoms(i) = ADPi.MTOM;
         fuels(i) = ADPi.Mf_Fuel * ADPi.MTOM;
         oems(i)  = ADPi.OEM;
         areas(i) = ADPi.WingArea;
         ARs(i)   = ADPi.AR();
-        fprintf('MTOM=%.0f t, Fuel=%.0f t, AR=%.2f\n', mtoms(i)/1e3, fuels(i)/1e3, ARs(i));
+
+        fprintf('MTOM=%.0f t, Fuel=%.0f t, AR=%.2f\n', ...
+                mtoms(i)/1e3, fuels(i)/1e3, ARs(i));
     catch ME
         fprintf('FAILED: %s\n', ME.message);
         mtoms(i) = NaN; fuels(i) = NaN; oems(i) = NaN;
         areas(i) = NaN; ARs(i)   = NaN;
     end
 end
+
 fprintf('\nTrade study complete.\n\n');
 
 
 %% ═══════════════════════════════════════════════════════════════════════
-%  PART 12 — TRADE STUDY PLOTS
+%  Plot trade study results
 %% ═══════════════════════════════════════════════════════════════════════
 
 fprintf('═══════════════════════════════════════════════════════════\n');
@@ -577,59 +619,56 @@ tt = tiledlayout(3, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile(1);
 plot(Spans, mtoms/1e3, '-s', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.2 0.4 0.8], 'MarkerFaceColor', [0.4 0.6 1.0]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('MTOM [t]','FontSize',11);
-title('MTOM vs Span','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('MTOM [t]', 'FontSize', 11);
+title('MTOM vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
 nexttile(2);
 plot(Spans, fuels/1e3, '-o', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.9 0.5 0.1], 'MarkerFaceColor', [1.0 0.7 0.3]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('Block Fuel [t]','FontSize',11);
-title('Block Fuel vs Span','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('Block Fuel [t]', 'FontSize', 11);
+title('Block Fuel vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
 nexttile(3);
 plot(Spans, oems/1e3, '-d', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.3 0.7 0.4], 'MarkerFaceColor', [0.5 0.9 0.6]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('OEM [t]','FontSize',11);
-title('OEM vs Span','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('OEM [t]', 'FontSize', 11);
+title('OEM vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
 nexttile(4);
 plot(Spans, areas, '-^', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.7 0.3 0.7], 'MarkerFaceColor', [0.9 0.5 0.9]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('Wing Area [m²]','FontSize',11);
-title('Wing Area vs Span','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('Wing Area [m²]', 'FontSize', 11);
+title('Wing Area vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
 nexttile(5);
-% AR is fixed at 10 throughout — replaced with Wing Loading which varies
-WS_vals = (mtoms * 9.81) ./ areas;
-plot(Spans, WS_vals/1e3, '-v', 'LineWidth', 2, 'MarkerSize', 8, ...
+plot(Spans, ARs, '-v', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.8 0.2 0.2], 'MarkerFaceColor', [1.0 0.4 0.4]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('Wing Loading [kN/m²]','FontSize',11);
-title('Wing Loading vs Span  (AR = 10 fixed)','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('Aspect Ratio [-]', 'FontSize', 11);
+title('Aspect Ratio vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
 nexttile(6);
 plot(Spans, (fuels./mtoms)*100, '-p', 'LineWidth', 2, 'MarkerSize', 8, ...
      'Color', [0.5 0.5 0.5], 'MarkerFaceColor', [0.7 0.7 0.7]);
-grid on; xlabel('Span [m]','FontSize',11); ylabel('Fuel Fraction [% MTOM]','FontSize',11);
-title('Fuel Fraction vs Span','FontSize',12,'FontWeight','bold');
+grid on; xlabel('Span [m]', 'FontSize', 11); ylabel('Fuel Fraction [% MTOM]', 'FontSize', 11);
+title('Fuel Fraction vs Span', 'FontSize', 12, 'FontWeight', 'bold');
 
-title(tt, 'Boxwing Freighter — Wing Span Trade Study  (AR = 10 fixed)', ...
-      'FontSize',14,'FontWeight','bold');
+title(tt, 'Boxwing Freighter — Wing Span Trade Study', ...
+      'FontSize', 14, 'FontWeight', 'bold');
 
 
 %% ═══════════════════════════════════════════════════════════════════════
-%  PART 13 — OPTIMUM SPAN IDENTIFICATION
+%  PART 12 — OPTIMUM SPAN IDENTIFICATION
 %% ═══════════════════════════════════════════════════════════════════════
 
 fprintf('═══════════════════════════════════════════════════════════\n');
 fprintf('   OPTIMUM SPAN ANALYSIS\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
-valid = ~isnan(mtoms);
-[mtom_min, idx_mtom] = min(mtoms(valid));
-span_opt_mtom = Spans(valid); span_opt_mtom = span_opt_mtom(idx_mtom);
+[mtom_min, idx_mtom] = min(mtoms);
+span_opt_mtom = Spans(idx_mtom);
 
-[fuel_min, idx_fuel] = min(fuels(valid));
-span_opt_fuel = Spans(valid); span_opt_fuel = span_opt_fuel(idx_fuel);
+[fuel_min, idx_fuel] = min(fuels);
+span_opt_fuel = Spans(idx_fuel);
 
 fprintf('Minimum MTOM:       %.1f t  at  span = %.0f m\n', mtom_min/1e3, span_opt_mtom);
 fprintf('Minimum Block Fuel: %.1f t  at  span = %.0f m\n', fuel_min/1e3, span_opt_fuel);
@@ -646,51 +685,56 @@ plot(span_opt_fuel, fuel_min/1e3, 'r*', 'MarkerSize', 15, 'LineWidth', 2);
 text(span_opt_fuel, fuel_min/1e3, sprintf(' <- Min Fuel\n   (%.0f m)', span_opt_fuel), ...
      'FontSize', 9, 'Color', 'r', 'FontWeight', 'bold');
 
-% FIX 5: save trade study figure immediately while it's still valid
-saveas(figure(3), 'Boxwing_TradeStudy.png');
-fprintf('  Saved: Boxwing_TradeStudy.png\n\n');
-
 
 %% ═══════════════════════════════════════════════════════════════════════
-%  PART 14 — SUMMARY TABLE
+%  PART 13 — SUMMARY TABLE
 %% ═══════════════════════════════════════════════════════════════════════
 
 fprintf('═══════════════════════════════════════════════════════════\n');
 fprintf('   SUMMARY TABLE\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
-idx_f = find(valid); idx_mtom2 = idx_f(idx_mtom); idx_fuel2 = idx_f(idx_fuel);
-
 fprintf('%-25s | %-12s | %-12s | %-12s\n', 'Parameter', 'Baseline', 'Min MTOM', 'Min Fuel');
 fprintf('%s\n', repmat('-', 1, 70));
-fprintf('%-25s | %10.1f m | %10.1f m | %10.1f m\n', 'Span',        ADP.EffectiveSpan,        span_opt_mtom,          span_opt_fuel);
-fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'MTOM',        ADP.MTOM/1e3,             mtom_min/1e3,           mtoms(idx_fuel2)/1e3);
-fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'Block Fuel',  sizing_out.BlockFuel/1e3, fuels(idx_mtom2)/1e3,   fuel_min/1e3);
-fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'OEM',         ADP.OEM/1e3,              oems(idx_mtom2)/1e3,    oems(idx_fuel2)/1e3);
-fprintf('%-25s | %10.1f m2| %10.1f m2| %10.1f m2\n','Wing Area',   ADP.WingArea,             areas(idx_mtom2),       areas(idx_fuel2));
-fprintf('%-25s | %10.2f   | %10.2f   | %10.2f\n',   'Aspect Ratio',ADP.AR(),                 ARs(idx_mtom2),         ARs(idx_fuel2));
+fprintf('%-25s | %10.1f m | %10.1f m | %10.1f m\n', 'Span',       ADP.EffectiveSpan,        span_opt_mtom,          span_opt_fuel);
+fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'MTOM',       ADP.MTOM/1e3,             mtom_min/1e3,           mtoms(idx_fuel)/1e3);
+fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'Block Fuel', sizing_out.BlockFuel/1e3, fuels(idx_mtom)/1e3,    fuel_min/1e3);
+fprintf('%-25s | %10.1f t | %10.1f t | %10.1f t\n', 'OEM',        ADP.OEM/1e3,              oems(idx_mtom)/1e3,     oems(idx_fuel)/1e3);
+fprintf('%-25s | %10.1f m2| %10.1f m2| %10.1f m2\n','Wing Area',  ADP.WingArea,             areas(idx_mtom),        areas(idx_fuel));
+fprintf('%-25s | %10.2f   | %10.2f   | %10.2f\n',   'Aspect Ratio',ADP.AR(),                ARs(idx_mtom),          ARs(idx_fuel));
 fprintf('%s\n\n', repmat('-', 1, 70));
 
 
 %% ═══════════════════════════════════════════════════════════════════════
-%  PART 15 — EXPORT CSV
-%  FIX 5: figure saveas calls moved to immediately after each plot.
-%          Only CSV export remains here.
+%  PART 14 — EXPORT RESULTS
 %% ═══════════════════════════════════════════════════════════════════════
 
 fprintf('═══════════════════════════════════════════════════════════\n');
 fprintf('   EXPORTING RESULTS\n');
 fprintf('═══════════════════════════════════════════════════════════\n\n');
 
+saveas(figure(1), 'Boxwing_Geometry.png');
+saveas(figure(2), 'Boxwing_MassBreakdown.png');
+saveas(figure(3), 'Boxwing_TradeStudy.png');
+
+fprintf('Figures saved:\n');
+fprintf('  Boxwing_Geometry.png\n');
+fprintf('  Boxwing_MassBreakdown.png\n');
+fprintf('  Boxwing_TradeStudy.png\n\n');
+
 T = table(Spans', mtoms'/1e3, fuels'/1e3, oems'/1e3, areas', ARs', ...
           'VariableNames', {'Span_m','MTOM_t','BlockFuel_t','OEM_t','WingArea_m2','AspectRatio'});
 writetable(T, 'Boxwing_TradeStudy.csv');
 fprintf('Trade study data saved: Boxwing_TradeStudy.csv\n\n');
 
+
+%% DONE
+
 fprintf('╔════════════════════════════════════════════════════════════╗\n');
 fprintf('║                  ANALYSIS COMPLETE                         ║\n');
 fprintf('╠════════════════════════════════════════════════════════════╣\n');
-fprintf('║  Figures 1–7,14 saved to disk. CSV exported.               ║\n');
+fprintf('║  All results displayed in Figures 1-3 and saved to disk.   ║\n');
+fprintf('║  Trade study data exported to Boxwing_TradeStudy.csv       ║\n');
 fprintf('╚════════════════════════════════════════════════════════════╝\n\n');
 
 
@@ -699,32 +743,29 @@ fprintf('╚══════════════════════�
 %% ═══════════════════════════════════════════════════════════════════════
 
 function ADPi = freshADP(frontSpan, SI)
-%FRESHADP  Create a new ADP for the given front-wing span.
-%  FIX 4: c_ref_fixed is initialised to 0 in the new ADP constructor,
-%  then set on first updateDerivedProps call from baseline 60m span.
-%  When we set a different frontSpan and call updateDerivedProps again,
-%  c_ref_fixed is already non-zero so it is NOT overwritten — meaning
-%  WingArea = b_eff * c_ref (linear in span, not quadratic).
-%  This lets AR vary from ~6.7 (40m) to ~10 (60m), revealing the optimum.
-
-    ADPi           = Boxwing.B777.ADP();   % constructor sets c_ref_fixed = 6m
+%FRESHADP  Create a new ADP object configured for a given front-wing span.
+%  ADP is a handle class, so assignment copies the reference, not the data.
+%  This function always constructs a brand-new object to avoid aliasing.
+    ADPi           = Boxwing.B777.ADP();
     ADPi.TLAR      = Boxwing.cast.TLAR.Boxwing();
-    ADPi.Engine    = GE90Engine();
+    ADPi.Engine    = GE90Engine();   % engine baseline (scaling done in engine.m)
 
     ADPi.CockpitLength = 6.5;
     ADPi.CabinRadius   = 2.93;
     ADPi.CabinLength   = 70.0 - ADPi.CockpitLength - ADPi.CabinRadius*2*1.48;
 
-    % Wing positions are computed by updateDerivedProps — do not set manually here.
+    L_f = ADPi.CockpitLength + ADPi.CabinLength + ADPi.CabinRadius*1.48;
+    ADPi.FrontWingPos  = 0.40 * L_f;
+    ADPi.RearWingPos   = 0.90 * L_f;
 
     ADPi.V_HT = 0;
     ADPi.V_VT = 0.05;
 
-    rearSpan = frontSpan - 10;
-    ADPi.FrontWingSpan   = frontSpan;
-    ADPi.RearWingSpan    = rearSpan;
-    ADPi.ConnectorHeight = 3;
-    ADPi.updateDerivedProps();   % c_ref_fixed kept; WingArea = b_eff*c_ref
+    rearSpan = frontSpan - 10;   % keep rear 10 m shorter than front
+    ADPi.FrontWingSpan  = frontSpan;
+    ADPi.RearWingSpan   = rearSpan;
+    ADPi.ConnectorHeight = 8;
+    ADPi.updateDerivedProps();
 
     ADPi.MTOM    = 3.0 * ADPi.TLAR.Payload;
     ADPi.Mf_Fuel = 0.28;
@@ -737,28 +778,962 @@ end
 
 
 function eng = GE90Engine()
-    eng.T_ref    = 513e3;
-    eng.D_ref    = 3.124;
-    eng.L_ref    = 7.29;
-    eng.M_ref    = 8618;
+%GE90ENGINE  Engine data object based on GE90-115B.
+%  Baseline geometry and TSFC model.
+%  Rubber scaling (Rubberise) is now handled inline inside engine.m,
+%  so this object only needs to carry the reference values + TSFC.
+%
+%  Fields used by the codebase:
+%    .T_ref / .D_ref / .L_ref / .M_ref  — baseline for inline scaling
+%    .Diameter / .Length / .Mass        — current (updated by engine.m each iter)
+%    .TSFC(Mach, alt_m)                 — used by MissionAnalysis.m
+
+    eng.T_ref    = 513e3;   % [N]  GE90-115B SLS thrust per engine
+    eng.D_ref    = 3.124;   % [m]  fan diameter
+    eng.L_ref    = 7.29;    % [m]  overall length
+    eng.M_ref    = 8618;    % [kg] dry mass per engine
+
+    % Initial geometry = baseline (engine.m will update each sizing iteration)
     eng.Diameter = eng.D_ref;
     eng.Length   = eng.L_ref;
     eng.Mass     = eng.M_ref;
-    eng.TSFC     = @(Mach, alt_m) rubberTSFC(Mach, alt_m);
+
+    eng.TSFC = @(Mach, alt_m) rubberTSFC(Mach, alt_m);
 end
 
 function tsfc = rubberTSFC(Mach, alt_m)
-    TSFC_SLS = 0.0158e-3;
+%RUBBERTSFC  Mattingly correlation, high-BPR turbofan (BPR~9, GE90/GEnX).
+    TSFC_SLS = 0.0158e-3;   % [1/s]
     theta    = (288.15 - 0.0065*min(alt_m, 11000)) / 288.15;
     tsfc     = max(TSFC_SLS * theta^(-0.5) * (0.45 + 0.54*Mach), 1e-5);
 end
 
-function tsfc = ultraFanTSFC(Mach, alt_m)
-    BPR    = 15;
-    SFC_TO = 18 * exp(-0.12*BPR) * 1e-6;
-    SFC_cr = 22 * exp(-0.05*BPR) * 1e-6;
-    T      = max(288.15 - 0.0065*min(alt_m,11000), 216.65);
-    sr     = sqrt(T/288.15);
-    SFC_B  = (SFC_cr/sr - SFC_TO) / 0.82;
-    tsfc   = max((SFC_TO + SFC_B*Mach)*sr, 1e-6);
+
+
+
+
+
+
+
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+% -----------------------------------------------------------------------------------------------------
+
+%% CODE FOR SENSITIVITY ANALYSIS
+function PlotMissionAndSensitivity(ADP, season, per_leg, sizing_out, opts)
+%PLOTMISSIONANDSENSITIVITY  Full visualisation suite for the boxwing study.
+%
+%  CALL FROM Run.m (after Part 9 DOC block):
+%
+%    [season, per_leg] = Boxwing.script.MissionAnalysisAllFlights(ADP, fleet_size, SAF_ratio);
+%    PlotMissionAndSensitivity(ADP, season, per_leg, sizing_out);
+%
+%  OPTIONAL opts struct fields (all have defaults):
+%    opts.fleet_size   [10]      fleet size for DOC/ATR
+%    opts.SAF_ratio    [0.0]     SAF blend for baseline
+%    opts.n_sens       [7]       points per sensitivity sweep
+%    opts.fig_offset   [20]      first figure number (avoids Run.m figures 1-14)
+%    opts.save_figs    [true]    save all figures as PNG
+%    opts.T_max_K      [1850]    turbine inlet temp for DOC
+ 
+% ── Defaults ─────────────────────────────────────────────────────────────
+if nargin < 5 || isempty(opts), opts = struct(); end
+fleet_size  = getOpt(opts, 'fleet_size',  10);
+SAF_ratio   = getOpt(opts, 'SAF_ratio',   0.0);
+N_SENS      = getOpt(opts, 'n_sens',      7);
+FIG0        = getOpt(opts, 'fig_offset',  20);
+SAVE        = getOpt(opts, 'save_figs',   true);
+T_MAX_K     = getOpt(opts, 'T_max_K',    1850);
+FT2M        = 0.30480;
+ 
+fprintf('\n╔══════════════════════════════════════════════════════════╗\n');
+fprintf('║   MISSION VISUALISATION + SENSITIVITY ANALYSIS           ║\n');
+fprintf('╚══════════════════════════════════════════════════════════╝\n\n');
+ 
+% ── Pre-compute baseline DOC and ATR ─────────────────────────────────────
+[DOC_base, docBD] = Boxwing.script.DOC( ...
+    ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
+    fleet_size, SAF_ratio, ADP.TLAR.M_c, T_MAX_K);
+ 
+[ATR_base, ~] = Boxwing.cast.eng.Engine_code( ...
+    ADP.MTOM, ADP.OEM, ADP.WingArea, ADP.AR_target, ...
+    ADP.TLAR.Range/1e3, ADP.TLAR.M_c);
+ 
+fprintf('  Baseline DOC : $%.2f M/season\n', DOC_base/1e6);
+fprintf('  Baseline ATR : %.4e K\n\n', ATR_base);
+ 
+% ── Unpack per-leg data ───────────────────────────────────────────────────
+n_legs = numel(per_leg);
+ 
+labels     = strtrim({per_leg.label});
+% Shorten labels for axis readability
+short_lbl  = cellfun(@(s) shortLabel(s), labels, 'UniformOutput', false);
+ 
+dist_km    = [per_leg.dist_km];
+block_fuel = [per_leg.BlockFuel_kg] / fleet_size / 1e3;   % tonnes per aircraft
+trip_fuel  = [per_leg.TripFuel_kg]  / fleet_size / 1e3;
+res_fuel   = [per_leg.ResFuel_kg]   / fleet_size / 1e3;
+is_empty   = logical([per_leg.is_empty]);
+n_land     = [per_leg.n_landings]   / fleet_size;
+t_hr       = [per_leg.time_hr];
+ 
+% Fuel per km and per tonne-km (payload = TLAR.Payload/1000 tonnes)
+pld_t      = ADP.TLAR.Payload / 1e3;
+fuel_per_km      = zeros(1, n_legs);
+fuel_per_tonne_km = zeros(1, n_legs);
+for i = 1:n_legs
+    if dist_km(i) > 0
+        fuel_per_km(i)       = block_fuel(i) / dist_km(i) * 1000;  % kg/km per ac
+        fuel_per_tonne_km(i) = fuel_per_km(i) / (is_empty(i)*0 + ~is_empty(i)*pld_t + 1e-9);
+    end
+end
+ 
+% Sort by distance for comparison plots
+[dist_sorted, sort_idx] = sort(dist_km, 'descend');
+lbl_sorted = short_lbl(sort_idx);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 1 (F20): BLOCK FUEL PER LEG  — sorted horizontal bar
+% ════════════════════════════════════════════════════════════════════════
+f20 = newFig(FIG0+0, 'Block Fuel per Leg', [60 60 1300 700]);
+bf_s = block_fuel(sort_idx);
+empty_s = is_empty(sort_idx);
+ 
+bar_colors = repmat([0.25 0.55 0.85], n_legs, 1);
+bar_colors(empty_s, :) = repmat([0.7 0.7 0.7], sum(empty_s), 1);
+ 
+bh = barh(1:n_legs, bf_s, 0.65);
+bh.FaceColor = 'flat';
+bh.CData = bar_colors;
+hold on; grid on; box on;
+ 
+% Annotate with distance
+for i = 1:n_legs
+    text(bf_s(i) + max(bf_s)*0.01, i, sprintf('%.0f km', dist_sorted(i)), ...
+         'FontSize', 8, 'VerticalAlignment', 'middle');
+end
+ 
+set(gca, 'YTick', 1:n_legs, 'YTickLabel', lbl_sorted, 'FontSize', 9);
+xlabel('Block Fuel per Aircraft [tonnes]', 'FontSize', 12, 'FontWeight', 'bold');
+title('Block Fuel by Leg — Season Schedule', 'FontSize', 14, 'FontWeight', 'bold');
+legend([bh], {'Loaded leg (Loaded)', 'Empty ferry'}, 'Location', 'southeast');
+% Fix legend manually
+patch(NaN, NaN, [0.25 0.55 0.85], 'DisplayName', 'Loaded leg');
+patch(NaN, NaN, [0.70 0.70 0.70], 'DisplayName', 'Empty ferry');
+legend('Location', 'southeast', 'FontSize', 10);
+saveFig(f20, 'Mission_FuelPerLeg', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 2 (F21): STACKED FUEL BREAKDOWN — trip vs reserve
+% ════════════════════════════════════════════════════════════════════════
+f21 = newFig(FIG0+1, 'Trip vs Reserve Fuel', [60 60 1300 600]);
+tf_s  = trip_fuel(sort_idx);
+rf_s  = res_fuel(sort_idx);
+ 
+bh2 = barh(1:n_legs, [tf_s', rf_s'], 0.65, 'stacked');
+bh2(1).FaceColor = [0.25 0.55 0.85];
+bh2(2).FaceColor = [0.95 0.55 0.10];
+hold on; grid on; box on;
+set(gca, 'YTick', 1:n_legs, 'YTickLabel', lbl_sorted, 'FontSize', 9);
+xlabel('Fuel per Aircraft [tonnes]', 'FontSize', 12, 'FontWeight', 'bold');
+title('Trip vs Reserve Fuel by Leg', 'FontSize', 14, 'FontWeight', 'bold');
+legend({'Trip fuel', 'Reserve fuel'}, 'Location', 'southeast', 'FontSize', 11);
+saveFig(f21, 'Mission_TripVsReserve', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 3 (F22): FUEL EFFICIENCY — fuel per km
+% ════════════════════════════════════════════════════════════════════════
+f22 = newFig(FIG0+2, 'Fuel Efficiency per Leg', [60 60 1400 550]);
+tl22 = tiledlayout(1, 2, 'TileSpacing', 'compact');
+ 
+nexttile;
+scatter(dist_km(~is_empty), fuel_per_km(~is_empty), 80, ...
+        block_fuel(~is_empty), 'filled', 'DisplayName', 'Loaded');
+hold on;
+scatter(dist_km(is_empty), fuel_per_km(is_empty), 60, ...
+        [0.7 0.7 0.7], 'filled', '^', 'DisplayName', 'Empty ferry');
+cb = colorbar; cb.Label.String = 'Total Block Fuel [t]';
+colormap(gca, parula);
+grid on; box on;
+xlabel('Leg Distance [km]', 'FontSize', 11);
+ylabel('Fuel per km [kg/km per aircraft]', 'FontSize', 11);
+title('Fuel per km vs Distance', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'northwest', 'FontSize', 9);
+ 
+nexttile;
+scatter(dist_km(~is_empty), fuel_per_tonne_km(~is_empty), 80, ...
+        block_fuel(~is_empty), 'filled');
+colormap(gca, parula);
+grid on; box on;
+xlabel('Leg Distance [km]', 'FontSize', 11);
+ylabel('Fuel per tonne-km [kg/t-km]', 'FontSize', 11);
+title('Fuel Efficiency vs Distance (Loaded legs)', 'FontSize', 12, 'FontWeight', 'bold');
+% Fit trend line
+if sum(~is_empty) > 2
+    p = polyfit(dist_km(~is_empty), fuel_per_tonne_km(~is_empty), 1);
+    x_fit = linspace(min(dist_km(~is_empty)), max(dist_km(~is_empty)), 100);
+    hold on;
+    plot(x_fit, polyval(p, x_fit), 'r--', 'LineWidth', 1.5, 'DisplayName', 'Trend');
+    legend('Loaded leg', 'Trend', 'Location', 'northeast', 'FontSize', 9);
+end
+saveFig(f22, 'Mission_FuelEfficiency', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 4 (F23): DESIGN MISSION PROFILE — altitude vs distance
+%  Reconstructed from segment data in per_leg(1).detail{1}
+% ════════════════════════════════════════════════════════════════════════
+% Find the longest loaded leg (most representative of design mission)
+[~, idx_design] = max(dist_km .* (~is_empty));
+det_design = [];
+if ~isempty(per_leg(idx_design).detail)
+    det_design = per_leg(idx_design).detail{1};
+end
+ 
+f23 = newFig(FIG0+3, 'Design Mission Profile', [60 60 1300 600]);
+if ~isempty(det_design) && isfield(det_design, 'segments')
+    plotMissionProfile(det_design, ADP, FT2M, ...
+        sprintf('Mission Profile — %s (%.0f km)', ...
+        shortLabel(per_leg(idx_design).label), dist_km(idx_design)));
+else
+    % Schematic version if segments not available
+    plotSchematicProfile(ADP, sizing_out, FT2M);
+end
+saveFig(f23, 'Mission_DesignProfile', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 5 (F24): SEGMENT FUEL BREAKDOWN — design mission pie + bar
+% ════════════════════════════════════════════════════════════════════════
+f24 = newFig(FIG0+4, 'Segment Fuel Breakdown', [60 60 1200 550]);
+if ~isempty(det_design) && isfield(det_design, 'segments')
+    segs = det_design.segments;
+    seg_names = {segs.name};
+    seg_fuels = [segs.fuel] / 1e3;   % tonnes
+    non_zero  = seg_fuels > 1e-4;
+ 
+    tl24 = tiledlayout(1, 2, 'TileSpacing', 'compact');
+ 
+    nexttile;
+    pie_colors = lines(sum(non_zero));
+    p = pie(seg_fuels(non_zero));
+    labels_pie = seg_names(non_zero);
+    % Add values to labels
+    fuels_nz = seg_fuels(non_zero);
+    for k = 1:numel(labels_pie)
+        labels_pie{k} = sprintf('%s\n%.1ft', labels_pie{k}, fuels_nz(k));
+    end
+    colormap(gca, lines(sum(non_zero)));
+    title('Segment Fuel Split (Design Mission)', 'FontSize', 12, 'FontWeight', 'bold');
+ 
+    nexttile;
+    bar_h = barh(1:sum(non_zero), fuels_nz, 0.6);
+    bar_h.FaceColor = 'flat';
+    for k = 1:sum(non_zero)
+        bar_h.CData(k,:) = pie_colors(k,:);
+    end
+    set(gca, 'YTick', 1:sum(non_zero), 'YTickLabel', seg_names(non_zero), 'FontSize', 10);
+    xlabel('Fuel [tonnes]', 'FontSize', 11);
+    grid on; box on;
+    title('Segment Fuel (bar)', 'FontSize', 12, 'FontWeight', 'bold');
+    for k = 1:sum(non_zero)
+        text(fuels_nz(k) + max(fuels_nz)*0.01, k, ...
+             sprintf('%.1ft (%.0f%%)', fuels_nz(k), fuels_nz(k)/sum(fuels_nz)*100), ...
+             'FontSize', 9, 'VerticalAlignment', 'middle');
+    end
+ 
+    title(tl24, sprintf('Segment Fuel — %s', shortLabel(per_leg(idx_design).label)), ...
+          'FontSize', 13, 'FontWeight', 'bold');
+end
+saveFig(f24, 'Mission_SegmentFuel', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 6 (F25): FLIGHT TIME vs DISTANCE — productivity scatter
+% ════════════════════════════════════════════════════════════════════════
+f25 = newFig(FIG0+5, 'Flight Time vs Distance', [60 60 1100 550]);
+tl25 = tiledlayout(1, 2, 'TileSpacing', 'compact');
+ 
+nexttile;
+scatter(dist_km, t_hr, 80, block_fuel, 'filled');
+colormap(gca, parula); cb2 = colorbar; cb2.Label.String = 'Block Fuel [t]';
+grid on; box on;
+xlabel('Leg Distance [km]', 'FontSize', 11);
+ylabel('Block Time [hr]', 'FontSize', 11);
+title('Flight Time vs Distance', 'FontSize', 12, 'FontWeight', 'bold');
+% Reference line: speed = M_c * a_ISA_cruise
+[~, a_cr] = Boxwing.cast.atmos(ADP.TLAR.Alt_cruise);
+V_cruise_kph = ADP.TLAR.M_c * a_cr * 3.6;
+hold on;
+x_ref = [0 max(dist_km)*1.05];
+plot(x_ref, x_ref / V_cruise_kph, 'r--', 'LineWidth', 1.5, ...
+     'DisplayName', sprintf('Pure cruise (M%.2f)', ADP.TLAR.M_c));
+legend('Legs', 'Pure cruise', 'Location', 'northwest', 'FontSize', 9);
+ 
+nexttile;
+% Average speed per leg (effective block speed)
+avg_speed = dist_km ./ max(t_hr, 0.01);
+scatter(dist_km, avg_speed, 80, block_fuel, 'filled');
+colormap(gca, parula);
+hold on;
+yline(V_cruise_kph, 'r--', 'LineWidth', 1.5, ...
+      'DisplayName', sprintf('Cruise speed (%.0f km/h)', V_cruise_kph));
+grid on; box on;
+xlabel('Leg Distance [km]', 'FontSize', 11);
+ylabel('Effective Block Speed [km/h]', 'FontSize', 11);
+title('Effective Block Speed vs Distance', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Legs', 'Cruise speed', 'Location', 'southeast', 'FontSize', 9);
+saveFig(f25, 'Mission_TimeDistance', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 7 (F26): CUMULATIVE SEASONAL FUEL — waterfall-style
+% ════════════════════════════════════════════════════════════════════════
+f26 = newFig(FIG0+6, 'Seasonal Cumulative Fuel', [60 60 1400 500]);
+cum_fuel = cumsum(block_fuel * fleet_size);   % cumulative across fleet
+ 
+area_colors = zeros(n_legs, 3);
+area_colors(is_empty, :)  = repmat([0.7 0.7 0.7], sum(is_empty), 1);
+area_colors(~is_empty, :) = repmat([0.25 0.55 0.85], sum(~is_empty), 1);
+ 
+hold on; grid on; box on;
+bar(1:n_legs, block_fuel * fleet_size, 0.7, 'FaceColor', 'flat', ...
+    'CData', area_colors, 'EdgeColor', 'none');
+yyaxis right;
+plot(1:n_legs, cum_fuel, 'ko-', 'LineWidth', 2, 'MarkerFaceColor', 'k', ...
+     'MarkerSize', 5, 'DisplayName', 'Cumulative');
+ylabel('Cumulative Fleet Fuel [tonnes]', 'FontSize', 11);
+yyaxis left;
+ylabel('Fleet Block Fuel per Leg [tonnes]', 'FontSize', 11);
+xlabel('Leg', 'FontSize', 11);
+set(gca, 'XTick', 1:n_legs, 'XTickLabel', short_lbl, ...
+         'XTickLabelRotation', 45, 'FontSize', 8);
+title(sprintf('Cumulative Fleet Fuel — Season Total = %.0f t', cum_fuel(end)), ...
+      'FontSize', 13, 'FontWeight', 'bold');
+legend({'Loaded', 'Empty', 'Cumulative'}, 'Location', 'northwest', 'FontSize', 9);
+saveFig(f26, 'Mission_CumulativeFuel', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 8 (F27): CO2 CONTRIBUTION PER LEG
+% ════════════════════════════════════════════════════════════════════════
+EI_CO2   = 3.16;   % kg CO2 / kg fuel
+co2_leg  = block_fuel * fleet_size * 1e3 * EI_CO2 / 1e3;   % tonnes CO2
+ 
+f27 = newFig(FIG0+7, 'CO2 per Leg', [60 60 1300 600]);
+[co2_s, co2_idx] = sort(co2_leg, 'descend');
+bh3 = bar(1:n_legs, co2_s, 0.7, 'FaceColor', [0.85 0.25 0.15]);
+hold on; grid on; box on;
+set(gca, 'XTick', 1:n_legs, 'XTickLabel', short_lbl(co2_idx), ...
+         'XTickLabelRotation', 45, 'FontSize', 9);
+ylabel('CO_2 Emissions [tonnes] (all aircraft)', 'FontSize', 12);
+title(sprintf('CO_2 per Leg — Season Total = %.0f t', sum(co2_leg)), ...
+      'FontSize', 14, 'FontWeight', 'bold');
+% Highlight top 3 contributors
+for k = 1:min(3, n_legs)
+    text(k, co2_s(k) + max(co2_s)*0.01, ...
+         sprintf('%.0f t', co2_s(k)), 'HorizontalAlignment', 'center', ...
+         'FontSize', 9, 'FontWeight', 'bold', 'Color', 'k');
+end
+saveFig(f27, 'Mission_CO2PerLeg', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 9 (F28): CRITICAL MISSIONS RADAR / SPIDER CHART
+%  Normalised metrics for top-5 longest loaded legs
+% ════════════════════════════════════════════════════════════════════════
+loaded_idx = find(~is_empty);
+[~, top_ord] = sort(dist_km(loaded_idx), 'descend');
+top5 = loaded_idx(top_ord(1:min(5, numel(top_ord))));
+ 
+f28 = newFig(FIG0+8, 'Critical Missions Comparison', [60 60 1300 600]);
+metrics = [block_fuel(top5);           % block fuel
+           trip_fuel(top5);            % trip fuel
+           res_fuel(top5);             % reserve fuel
+           fuel_per_km(top5);          % efficiency
+           t_hr(top5)]';               % time
+ 
+met_names = {'Block Fuel\n[t]', 'Trip Fuel\n[t]', 'Reserve\n[t]', ...
+             'kg/km', 'Block Time\n[hr]'};
+n_m = size(metrics, 2);
+x_pos = (1:n_m)';
+n_top = size(metrics, 1);
+cmap = lines(n_top);
+ 
+tl28 = tiledlayout(1, 2, 'TileSpacing', 'compact');
+nexttile;
+% Normalised spider (each column normalised to its max)
+met_norm = metrics ./ max(metrics, [], 1);
+theta = linspace(0, 2*pi, n_m+1);
+for k = 1:n_top
+    vals = [met_norm(k,:), met_norm(k,1)];
+    polarplot(theta, vals, '-o', 'LineWidth', 1.8, 'Color', cmap(k,:), ...
+              'DisplayName', shortLabel(per_leg(top5(k)).label));
+    hold on;
+end
+legend('Location', 'southoutside', 'FontSize', 8, 'NumColumns', 2);
+title('Normalised Leg Metrics (Radar)', 'FontSize', 12, 'FontWeight', 'bold');
+ 
+nexttile;
+hold on; grid on; box on;
+categories = {'Block Fuel [t]', 'Trip Fuel [t]', 'Reserve [t]', 'kg/km', 'Time [hr]'};
+for k = 1:n_top
+    plot(1:n_m, met_norm(k,:), '-o', 'LineWidth', 1.8, 'Color', cmap(k,:), ...
+         'DisplayName', shortLabel(per_leg(top5(k)).label));
+end
+set(gca, 'XTick', 1:n_m, 'XTickLabel', categories, ...
+         'XTickLabelRotation', 20, 'FontSize', 9);
+ylabel('Normalised Value [-]', 'FontSize', 11);
+title('Critical Legs — Normalised Metrics', 'FontSize', 12, 'FontWeight', 'bold');
+legend('Location', 'northwest', 'FontSize', 8, 'NumColumns', 1);
+saveFig(f28, 'Mission_CriticalLegs', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 10 (F29): DOC BREAKDOWN PIE
+% ════════════════════════════════════════════════════════════════════════
+f29 = newFig(FIG0+9, 'DOC Breakdown', [60 60 1000 600]);
+doc_fields = {'crew','fuel','landing','parking','navigation', ...
+              'maintenance','depreciation','interest','insurance'};
+doc_vals   = zeros(1, numel(doc_fields));
+for k = 1:numel(doc_fields)
+    if isfield(docBD, doc_fields{k})
+        doc_vals(k) = docBD.(doc_fields{k});
+    end
+end
+nonzero_doc = doc_vals > 0;
+pie_labels  = cellfun(@(s,v) sprintf('%s\n$%.1fM (%.0f%%)', s, v/1e6, v/DOC_base*100), ...
+              doc_fields(nonzero_doc), num2cell(doc_vals(nonzero_doc)), ...
+              'UniformOutput', false);
+colormap(gca, parula);
+pie(doc_vals(nonzero_doc), pie_labels);
+title(sprintf('DOC Breakdown — Total $%.1fM/season', DOC_base/1e6), ...
+      'FontSize', 13, 'FontWeight', 'bold');
+saveFig(f29, 'Mission_DOCBreakdown', SAVE);
+ 
+%% ══════════════════════════════════════════════════════════════════════
+%  SENSITIVITY ANALYSIS
+%  For each variable: sweep a range, size aircraft, compute DOC & ATR.
+%  Variables: FrontWingSpan, Cruise Mach, Cruise Altitude, Fleet size,
+%             SAF ratio, Design range, AR_target
+%% ══════════════════════════════════════════════════════════════════════
+fprintf('  Running sensitivity analysis (%d points × 7 variables)...\n', N_SENS);
+fprintf('  [This may take a few minutes]\n\n');
+ 
+% Baseline values
+base.span    = ADP.FrontWingSpan;
+base.mach    = ADP.TLAR.M_c;
+base.alt_km  = ADP.TLAR.Alt_cruise / 1e3;
+base.fleet   = fleet_size;
+base.SAF     = SAF_ratio;
+base.range_km= ADP.TLAR.Range / 1e3;
+base.AR      = ADP.AR_target;
+ 
+% Sweep ranges  [lo, hi]
+sweeps = struct( ...
+    'span',     struct('lo', 45,   'hi', 65,   'unit', 'm',   'label', 'Front Wing Span'), ...
+    'mach',     struct('lo', 0.78, 'hi', 0.90, 'unit', '-',   'label', 'Cruise Mach'), ...
+    'alt_km',   struct('lo', 10.0, 'hi', 13.0, 'unit', 'km',  'label', 'Cruise Altitude'), ...
+    'fleet',    struct('lo', 4,    'hi', 16,   'unit', '-',   'label', 'Fleet Size'), ...
+    'SAF',      struct('lo', 0.0,  'hi', 1.0,  'unit', '-',   'label', 'SAF Ratio'), ...
+    'range_km', struct('lo', 5000, 'hi', 13000,'unit', 'km',  'label', 'Design Range'), ...
+    'AR',       struct('lo', 7,    'hi', 14,   'unit', '-',   'label', 'Aspect Ratio') ...
+);
+ 
+var_names = fieldnames(sweeps);
+N_VAR = numel(var_names);
+ 
+% Outputs: DOC, ATR, MTOM, BlockFuel, OEM
+out_names  = {'DOC [$M]', 'ATR [K]', 'MTOM [t]', 'Block Fuel [t]', 'OEM [t]'};
+N_OUT = numel(out_names);
+sens_x    = cell(N_VAR, 1);
+sens_y    = cell(N_VAR, N_OUT);
+sens_base = zeros(1, N_OUT);
+ 
+% Baseline outputs
+sens_base(1) = DOC_base / 1e6;
+sens_base(2) = ATR_base;
+sens_base(3) = ADP.MTOM / 1e3;
+sens_base(4) = sizing_out.BlockFuel / 1e3;
+sens_base(5) = ADP.OEM / 1e3;
+ 
+for v = 1:N_VAR
+    vname = var_names{v};
+    sw    = sweeps.(vname);
+    x_vec = linspace(sw.lo, sw.hi, N_SENS);
+    sens_x{v} = x_vec;
+ 
+    for k = 1:N_OUT
+        sens_y{v,k} = nan(1, N_SENS);
+    end
+ 
+    for s = 1:N_SENS
+        fprintf('    %s = %.3g ... ', sw.label, x_vec(s));
+        try
+            [ADPi, out_i] = sizeVariant(vname, x_vec(s), base, T_MAX_K);
+            % DOC
+            [DOCi, ~] = Boxwing.script.DOC( ...
+                ADPi.MTOM/1e3, ADPi.OEM, out_i.BlockFuel, ...
+                fleet_size, SAF_ratio, ADPi.TLAR.M_c, T_MAX_K);
+            % ATR
+            [ATRi, ~] = Boxwing.cast.eng.Engine_code( ...
+                ADPi.MTOM, ADPi.OEM, ADPi.WingArea, ADPi.AR_target, ...
+                ADPi.TLAR.Range/1e3, ADPi.TLAR.M_c);
+ 
+            sens_y{v,1}(s) = DOCi / 1e6;
+            sens_y{v,2}(s) = ATRi;
+            sens_y{v,3}(s) = ADPi.MTOM / 1e3;
+            sens_y{v,4}(s) = out_i.BlockFuel / 1e3;
+            sens_y{v,5}(s) = ADPi.OEM / 1e3;
+            fprintf('DOC=$%.2fM  ATR=%.3e\n', DOCi/1e6, ATRi);
+        catch ME
+            fprintf('FAILED: %s\n', ME.message);
+        end
+    end
+end
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 11 (F30): TORNADO CHART — DOC sensitivity at ±20% of range
+% ════════════════════════════════════════════════════════════════════════
+f30 = newFig(FIG0+10, 'Tornado DOC', [60 60 1100 600]);
+plotTornado(sens_x, sens_y, var_names, sweeps, 1, sens_base(1), ...
+            'DOC [$M/season]', 'Sensitivity of DOC to Design Variables');
+saveFig(f30, 'Sensitivity_Tornado_DOC', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 12 (F31): TORNADO CHART — ATR sensitivity
+% ════════════════════════════════════════════════════════════════════════
+f31 = newFig(FIG0+11, 'Tornado ATR', [60 60 1100 600]);
+plotTornado(sens_x, sens_y, var_names, sweeps, 2, sens_base(2), ...
+            'ATR_{100} [K]', 'Sensitivity of ATR_{100} to Design Variables');
+saveFig(f31, 'Sensitivity_Tornado_ATR', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 13 (F32): SWEEP CURVES — 7 variables × 5 outputs
+%  2-row × 4-col grid of line plots
+% ════════════════════════════════════════════════════════════════════════
+for o = 1:N_OUT
+    f = newFig(FIG0+11+o, sprintf('Sweep %s', out_names{o}), [60 60 1500 700]);
+    tl = tiledlayout(2, 4, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tl, sprintf('Sensitivity Sweeps — Output: %s', out_names{o}), ...
+          'FontSize', 13, 'FontWeight', 'bold');
+ 
+    for v = 1:N_VAR
+        nexttile;
+        sw   = sweeps.(var_names{v});
+        y    = sens_y{v,o};
+        x    = sens_x{v};
+        valid = ~isnan(y);
+        if sum(valid) >= 2
+            plot(x(valid), y(valid), '-o', 'LineWidth', 2, ...
+                 'Color', [0.2 0.5 0.85], 'MarkerFaceColor', [0.2 0.5 0.85], ...
+                 'MarkerSize', 6);
+            hold on;
+            % Baseline marker
+            plot(base.(var_names{v}), sens_base(o), 'r*', ...
+                 'MarkerSize', 12, 'LineWidth', 2);
+            grid on; box on;
+            xlabel(sprintf('%s [%s]', sw.label, sw.unit), 'FontSize', 9);
+            ylabel(out_names{o}, 'FontSize', 9);
+            title(sw.label, 'FontSize', 10, 'FontWeight', 'bold');
+            % Compute and show local sensitivity
+            dy = max(y(valid)) - min(y(valid));
+            dx_pct = (max(x) - min(x)) / base.(var_names{v}) * 100;
+            dy_pct = dy / sens_base(o) * 100;
+            text(0.05, 0.92, sprintf('\\DeltaOut = %.1f%%', dy_pct), ...
+                 'Units', 'normalized', 'FontSize', 8, 'Color', 'k', ...
+                 'BackgroundColor', 'w');
+        else
+            text(0.5, 0.5, 'Insufficient data', 'Units', 'normalized', ...
+                 'HorizontalAlignment', 'center');
+        end
+    end
+ 
+    % Hide extra tile if N_VAR < 8
+    if N_VAR < 8
+        for extra = N_VAR+1:8
+            try; nexttile; axis off; catch; end
+        end
+    end
+    saveFig(f, sprintf('Sensitivity_Sweeps_%s', matlab.lang.makeValidName(out_names{o})), SAVE);
+end
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 14 (F19): PARETO SCATTER — DOC vs ATR across all sweep points
+% ════════════════════════════════════════════════════════════════════════
+f19 = newFig(FIG0+19, 'DOC vs ATR Pareto Cloud', [60 60 1000 650]);
+hold on; grid on; box on;
+ 
+cmap_p = lines(N_VAR);
+for v = 1:N_VAR
+    y_doc = sens_y{v,1};
+    y_atr = sens_y{v,2};
+    valid  = ~isnan(y_doc) & ~isnan(y_atr);
+    if sum(valid) >= 2
+        scatter(y_doc(valid), y_atr(valid), 60, cmap_p(v,:), 'filled', ...
+                'DisplayName', sweeps.(var_names{v}).label);
+        % Connect with line to show direction
+        [~, seq] = sort(y_doc(valid));
+        y_d_s = y_doc(valid); y_a_s = y_atr(valid);
+        plot(y_d_s(seq), y_a_s(seq), '-', 'Color', [cmap_p(v,:) 0.35], ...
+             'LineWidth', 1.2, 'HandleVisibility', 'off');
+    end
+end
+% Baseline
+plot(sens_base(1), sens_base(2), 'kp', 'MarkerSize', 18, ...
+     'MarkerFaceColor', 'k', 'DisplayName', 'Baseline');
+xlabel('DOC [$M/season]', 'FontSize', 13, 'FontWeight', 'bold');
+ylabel('ATR_{100} [K]', 'FontSize', 13, 'FontWeight', 'bold');
+title('DOC vs ATR_{100} — Parametric Cloud', 'FontSize', 14, 'FontWeight', 'bold');
+legend('Location', 'best', 'FontSize', 9);
+saveFig(f19, 'Sensitivity_DOC_vs_ATR', SAVE);
+ 
+% ════════════════════════════════════════════════════════════════════════
+%  FIGURE 15 (F39): HEATMAP — Span × Mach → DOC  (2D sensitivity)
+% ════════════════════════════════════════════════════════════════════════
+fprintf('  Computing 2D sensitivity grid (Span × Mach)...\n');
+N2 = 5;
+spans_2d = linspace(sweeps.span.lo, sweeps.span.hi, N2);
+machs_2d = linspace(sweeps.mach.lo, sweeps.mach.hi, N2);
+DOC_grid = nan(N2, N2);
+ATR_grid = nan(N2, N2);
+ 
+for ii = 1:N2
+    for jj = 1:N2
+        try
+            base2 = base;
+            base2.span = spans_2d(ii);
+            base2.mach = machs_2d(jj);
+            [ADPij, outij] = sizeVariant2D(spans_2d(ii), machs_2d(jj), base2, T_MAX_K);
+            [DOCij, ~] = Boxwing.script.DOC( ...
+                ADPij.MTOM/1e3, ADPij.OEM, outij.BlockFuel, ...
+                fleet_size, SAF_ratio, ADPij.TLAR.M_c, T_MAX_K);
+            [ATRij, ~] = Boxwing.cast.eng.Engine_code( ...
+                ADPij.MTOM, ADPij.OEM, ADPij.WingArea, ADPij.AR_target, ...
+                ADPij.TLAR.Range/1e3, ADPij.TLAR.M_c);
+            DOC_grid(ii, jj) = DOCij / 1e6;
+            ATR_grid(ii, jj) = ATRij;
+        catch
+        end
+    end
+    fprintf('    Span row %d/%d done\n', ii, N2);
+end
+ 
+f39 = newFig(FIG0+20, 'Heatmap Span-Mach', [60 60 1300 550]);
+tl39 = tiledlayout(1, 2, 'TileSpacing', 'compact');
+title(tl39, 'Design Space: Span × Mach', 'FontSize', 13, 'FontWeight', 'bold');
+ 
+nexttile;
+imagesc(machs_2d, spans_2d, DOC_grid);
+set(gca, 'YDir', 'normal');
+colorbar; colormap(gca, jet);
+xlabel('Cruise Mach [-]', 'FontSize', 11);
+ylabel('Front Wing Span [m]', 'FontSize', 11);
+title('DOC [$M/season]', 'FontSize', 12, 'FontWeight', 'bold');
+hold on;
+% Mark baseline
+plot(base.mach, base.span, 'k*', 'MarkerSize', 14, 'LineWidth', 2);
+text(base.mach + 0.003, base.span + 0.5, 'Baseline', 'Color', 'k', 'FontSize', 10);
+ 
+nexttile;
+imagesc(machs_2d, spans_2d, ATR_grid);
+set(gca, 'YDir', 'normal');
+colorbar; colormap(gca, jet);
+xlabel('Cruise Mach [-]', 'FontSize', 11);
+ylabel('Front Wing Span [m]', 'FontSize', 11);
+title('ATR_{100} [K]', 'FontSize', 12, 'FontWeight', 'bold');
+hold on;
+plot(base.mach, base.span, 'k*', 'MarkerSize', 14, 'LineWidth', 2);
+text(base.mach + 0.003, base.span + 0.5, 'Baseline', 'Color', 'k', 'FontSize', 10);
+ 
+saveFig(f39, 'Sensitivity_Heatmap_SpanMach', SAVE);
+ 
+fprintf('\n  ✓ All figures generated.\n\n');
+end % ── main ────────────────────────────────────────────────────────────
+ 
+ 
+%% ════════════════════════════════════════════════════════════════════════
+%  LOCAL FUNCTIONS
+%% ════════════════════════════════════════════════════════════════════════
+ 
+function plotMissionProfile(det, ADP, FT2M, ttl)
+%PLOTMISSIONPROFILE  Altitude-distance profile with fuel-burn color overlay.
+    segs = det.segments;
+    seg_names = {segs.name};
+    seg_dists = [segs.dist] / 1e3;   % km
+    seg_fuels = [segs.fuel] / 1e3;   % tonnes
+ 
+    % Reconstruct altitude profile from segment names and ADP geometry
+    h_cruise_m = det.CruiseAlt_m;
+    h_ICA_ft   = h_cruise_m / FT2M / 100;  % flight level
+    H_LOITER   = 1500 * FT2M;
+ 
+    seg_h_start = zeros(1, numel(segs));
+    seg_h_end   = zeros(1, numel(segs));
+    cur_h       = 0;
+ 
+    for i = 1:numel(segs)
+        n = lower(segs(i).name);
+        if contains(n, 'taxi')
+            seg_h_start(i) = 0; seg_h_end(i) = 0;
+        elseif contains(n, 'takeoff')
+            seg_h_start(i) = 0; seg_h_end(i) = 1500*FT2M;
+            cur_h = 1500*FT2M;
+        elseif contains(n, 'climb')
+            seg_h_start(i) = cur_h;
+            seg_h_end(i)   = h_cruise_m;
+            cur_h = h_cruise_m;
+        elseif contains(n, 'cruise')
+            seg_h_start(i) = cur_h;
+            seg_h_end(i)   = cur_h;
+        elseif contains(n, 'descent')
+            seg_h_start(i) = cur_h;
+            seg_h_end(i)   = 1500*FT2M;
+            cur_h = 1500*FT2M;
+        elseif contains(n, 'approach')
+            seg_h_start(i) = cur_h;
+            seg_h_end(i)   = 0;
+            cur_h = 0;
+        elseif contains(n, {'gate','loiter','contingency','alternate'})
+            seg_h_start(i) = 0; seg_h_end(i) = 0;
+        end
+    end
+ 
+    cum_dist = [0, cumsum(seg_dists)];
+ 
+    tl = tiledlayout(2, 1, 'TileSpacing', 'compact');
+ 
+    nexttile;
+    hold on; grid on; box on;
+    for i = 1:numel(segs)
+        x_seg = [cum_dist(i), cum_dist(i+1)];
+        y_seg = [seg_h_start(i), seg_h_end(i)] / FT2M / 1e3;  % thousands of ft
+        fill_x = [x_seg, fliplr(x_seg)];
+        fill_y = [y_seg, 0, 0];
+        fill(fill_x, fill_y, [0.85 0.93 1.0], 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+        plot(x_seg, y_seg, 'b-', 'LineWidth', 2);
+        if max(seg_dists(i)) > 50
+            text(mean(x_seg), mean(y_seg)/2 + max(y_seg)*0.6, ...
+                 segs(i).name, 'HorizontalAlignment', 'center', ...
+                 'FontSize', 8, 'Color', [0.2 0.2 0.6]);
+        end
+    end
+    yline(h_cruise_m/FT2M/1e3, 'r--', 'LineWidth', 1, ...
+          'DisplayName', sprintf('ICA = FL%.0f', h_ICA_ft));
+    yline(10, 'k:', 'LineWidth', 1, 'DisplayName', 'FL100 (speed limit)');
+    ylabel('Altitude [1,000 ft]', 'FontSize', 11);
+    title(ttl, 'FontSize', 12, 'FontWeight', 'bold');
+    legend('Location', 'northeast', 'FontSize', 8);
+    xlim([0, cum_dist(end)]);
+ 
+    nexttile;
+    bar_h = bar(1:numel(segs), seg_fuels, 0.7, 'FaceColor', [0.95 0.50 0.10]);
+    hold on; grid on; box on;
+    set(gca, 'XTick', 1:numel(segs), 'XTickLabel', {segs.name}, ...
+             'XTickLabelRotation', 30, 'FontSize', 9);
+    ylabel('Segment Fuel [tonnes]', 'FontSize', 11);
+    xlabel('Mission Segment', 'FontSize', 11);
+    title('Fuel per Segment', 'FontSize', 11, 'FontWeight', 'bold');
+    for i = 1:numel(segs)
+        if seg_fuels(i) > max(seg_fuels)*0.05
+            text(i, seg_fuels(i) + max(seg_fuels)*0.01, sprintf('%.1ft', seg_fuels(i)), ...
+                 'HorizontalAlignment', 'center', 'FontSize', 8);
+        end
+    end
+end
+ 
+ 
+function plotSchematicProfile(ADP, sizing_out, FT2M)
+%PLOTSCHEMATICPROFILE  Schematic mission profile when segment detail unavailable.
+    h_cr_ft = ADP.TLAR.Alt_cruise / FT2M / 1e3;
+    [~, a_cr] = Boxwing.cast.atmos(ADP.TLAR.Alt_cruise);
+    V_kph  = ADP.TLAR.M_c * a_cr * 3.6;
+    R_km   = ADP.TLAR.Range / 1e3;
+ 
+    t_cl  = 30;                            % min, TTC spec
+    d_cl  = V_kph * t_cl/60;
+    d_de  = d_cl;                          % symmetric descent
+    d_cr  = R_km - d_cl - d_de;
+ 
+    x  = [0, d_cl, d_cl+d_cr, R_km];
+    h  = [0, h_cr_ft, h_cr_ft, 0];
+ 
+    hold on; grid on; box on;
+    fill([x, fliplr(x)], [h, zeros(1,4)], [0.85 0.93 1.0], 'FaceAlpha', 0.4, 'EdgeColor', 'none');
+    plot(x, h, 'b-o', 'LineWidth', 2.5, 'MarkerFaceColor', 'b');
+    yline(h_cr_ft, 'r--', 'LineWidth', 1, 'DisplayName', sprintf('Cruise FL%.0f', h_cr_ft*10));
+    text(d_cl/2, h_cr_ft*0.5, 'Climb', 'HorizontalAlignment', 'center', 'FontSize', 11);
+    text(d_cl + d_cr/2, h_cr_ft*1.05, sprintf('Cruise  %.0f km', d_cr), ...
+         'HorizontalAlignment', 'center', 'FontSize', 11);
+    text(d_cl+d_cr + d_de/2, h_cr_ft*0.5, 'Descent', 'HorizontalAlignment', 'center', 'FontSize', 11);
+    xlabel('Distance [km]', 'FontSize', 12);
+    ylabel('Altitude [1,000 ft]', 'FontSize', 12);
+    title('Schematic Mission Profile (segment detail unavailable)', ...
+          'FontSize', 12, 'FontWeight', 'bold');
+    legend('Location', 'northeast', 'FontSize', 9);
+end
+ 
+ 
+function plotTornado(sens_x, sens_y, var_names, sweeps, out_idx, base_val, ylbl, ttl)
+%PLOTTORNADO  Horizontal tornado chart showing output range per variable.
+    N_VAR = numel(var_names);
+    lo_val = zeros(N_VAR, 1);
+    hi_val = zeros(N_VAR, 1);
+    range_pct = zeros(N_VAR, 1);
+ 
+    for v = 1:N_VAR
+        y = sens_y{v, out_idx};
+        valid = ~isnan(y);
+        if sum(valid) >= 2
+            lo_val(v) = min(y(valid));
+            hi_val(v) = max(y(valid));
+        else
+            lo_val(v) = base_val; hi_val(v) = base_val;
+        end
+        range_pct(v) = (hi_val(v) - lo_val(v)) / abs(base_val) * 100;
+    end
+ 
+    [range_pct_s, ord] = sort(range_pct, 'ascend');
+    lo_s = lo_val(ord); hi_s = hi_val(ord);
+    labs = cellfun(@(n) sweeps.(n).label, var_names(ord), 'UniformOutput', false);
+ 
+    hold on; grid on; box on;
+    ypos = 1:N_VAR;
+ 
+    for v = 1:N_VAR
+        % Left of baseline (lo) in blue, right (hi) in red
+        if lo_s(v) < base_val
+            barh(ypos(v), lo_s(v) - base_val, 0.6, 'FaceColor', [0.25 0.55 0.85], ...
+                 'BaseValue', 0);
+        end
+        if hi_s(v) > base_val
+            barh(ypos(v), hi_s(v) - base_val, 0.6, 'FaceColor', [0.90 0.25 0.15], ...
+                 'BaseValue', 0);
+        end
+        text(max(abs(hi_s(v)-base_val), abs(lo_s(v)-base_val)) * 0.02, ypos(v), ...
+             sprintf('±%.1f%%', range_pct_s(v)/2), ...
+             'FontSize', 9, 'VerticalAlignment', 'middle', 'HorizontalAlignment', 'left');
+    end
+    xline(0, 'k-', 'LineWidth', 1.5);
+ 
+    set(gca, 'YTick', ypos, 'YTickLabel', labs, 'FontSize', 10);
+    xlabel(sprintf('Change in %s from baseline', ylbl), 'FontSize', 12);
+    title(ttl, 'FontSize', 13, 'FontWeight', 'bold');
+ 
+    patch(NaN,NaN,[0.25 0.55 0.85],'DisplayName','Decrease');
+    patch(NaN,NaN,[0.90 0.25 0.15],'DisplayName','Increase');
+    legend('Location','southeast','FontSize',10);
+end
+ 
+ 
+function [ADPi, out_i] = sizeVariant(vname, val, base, T_MAX_K)
+%SIZEVARIANT  Build a fresh ADP with one variable changed and resize.
+    ADPi = makeFreshADP(base);
+ 
+    switch vname
+        case 'span'
+            ADPi.FrontWingSpan = val;
+            ADPi.RearWingSpan  = val - 10;
+        case 'mach'
+            ADPi.TLAR.M_c = val;
+        case 'alt_km'
+            ADPi.TLAR.Alt_cruise = val * 1e3;
+            ADPi.TLAR.Alt_max    = max(val*1e3 + 500, ADPi.TLAR.Alt_max);
+        case 'fleet'
+            % Fleet size only affects DOC, not sizing; skip resizing
+            out_i.BlockFuel = ADPi.MTOM * ADPi.Mf_Fuel;
+            return;
+        case 'SAF'
+            % SAF only affects DOC/climate; no re-sizing needed
+            out_i.BlockFuel = ADPi.MTOM * ADPi.Mf_Fuel;
+            return;
+        case 'range_km'
+            ADPi.TLAR.Range = val * 1e3;
+        case 'AR'
+            ADPi.AR_target = val;
+    end
+ 
+    ADPi.updateDerivedProps();
+    ADPi.MTOM = 3 * ADPi.TLAR.Payload;   % reset initial guess
+    Boxwing.B777.UpdateAero(ADPi);
+    [ADPi, out_i] = Boxwing.B777.Size(ADPi, false);
+end
+ 
+ 
+function [ADPi, out_i] = sizeVariant2D(span_val, mach_val, base, T_MAX_K)
+%SIZEVARIANT2D  Vary span AND mach simultaneously.
+    ADPi = makeFreshADP(base);
+    ADPi.FrontWingSpan = span_val;
+    ADPi.RearWingSpan  = span_val - 10;
+    ADPi.TLAR.M_c      = mach_val;
+    ADPi.updateDerivedProps();
+    ADPi.MTOM = 3 * ADPi.TLAR.Payload;
+    Boxwing.B777.UpdateAero(ADPi);
+    [ADPi, out_i] = Boxwing.B777.Size(ADPi, false);
+end
+ 
+ 
+function ADPi = makeFreshADP(base)
+%MAKEFRESHADP  Construct a clean ADP from baseline scalars (avoids handle aliasing).
+    ADPi = Boxwing.B777.ADP();
+    ADPi.TLAR = Boxwing.cast.TLAR.Boxwing();
+ 
+    % Engine: re-use Mattingly TSFC (same as Run.m helper)
+    eng_obj.T_ref = 513e3; eng_obj.D_ref = 3.124;
+    eng_obj.L_ref = 7.29;  eng_obj.M_ref = 8618;
+    eng_obj.Diameter = eng_obj.D_ref;
+    eng_obj.Length   = eng_obj.L_ref;
+    eng_obj.Mass     = eng_obj.M_ref;
+    eng_obj.T_Static = eng_obj.T_ref;
+    eng_obj.TSFC = @(M, h) max(0.0158e-3 * ((288.15-0.0065*min(h,11000))/288.15)^(-0.5) * (0.45+0.54*M), 1e-5);
+    ADPi.Engine = eng_obj;
+ 
+    ADPi.CockpitLength = 6.5;
+    ADPi.CabinRadius   = 2.93;
+    ADPi.CabinLength   = 70.0 - 6.5 - 2.93*2*1.48;
+ 
+    L_f = ADPi.CockpitLength + ADPi.CabinLength + ADPi.CabinRadius*1.48;
+    ADPi.FrontWingPos = 0.40 * L_f;
+    ADPi.RearWingPos  = 0.90 * L_f;
+ 
+    ADPi.V_HT = 0; ADPi.V_VT = 0.05;
+    ADPi.FrontWingSpan   = base.span;
+    ADPi.RearWingSpan    = base.span - 10;
+    ADPi.ConnectorHeight = 8;
+    ADPi.AR_target       = base.AR;
+    ADPi.TLAR.M_c        = base.mach;
+    ADPi.TLAR.Alt_cruise = base.alt_km * 1e3;
+    ADPi.TLAR.Alt_max    = max(base.alt_km*1e3 + 500, ADPi.TLAR.Alt_max);
+    ADPi.TLAR.Range      = base.range_km * 1e3;
+ 
+    ADPi.Mf_Fuel = 0.28; ADPi.Mf_res = 0.04;
+    ADPi.Mf_Ldg  = 0.75; ADPi.Mf_TOC = 0.98;
+end
+ 
+ 
+function f = newFig(num, name, pos)
+    f = figure(num); clf;
+    set(f, 'Name', name, 'Color', 'w', 'Position', pos);
+end
+ 
+function saveFig(f, fname, doSave)
+    if doSave
+        saveas(f, [fname '.png']);
+        fprintf('    Saved: %s.png\n', fname);
+    end
+end
+ 
+function s = shortLabel(lbl)
+    % Extract route code (e.g. "Leg 05 | JED → MIA" → "JED→MIA")
+    tok = regexp(lbl, '([A-Z]{3})\s*[→-]+\s*([A-Z]{3})', 'tokens', 'once');
+    if ~isempty(tok)
+        s = sprintf('%s→%s', tok{1}, tok{2});
+    else
+        s = lbl(1:min(12, end));
+    end
+end
+ 
+function v = getOpt(opts, field, default)
+    if isfield(opts, field) && ~isempty(opts.(field))
+        v = opts.(field);
+    else
+        v = default;
+    end
 end
