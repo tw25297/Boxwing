@@ -22,7 +22,7 @@ x_le    = [tand(sweepLE)*(b/2), 0, 0, 0, tand(sweepLE)*(b/2)]';
 x_te    = x_le + cs;
 Xs      = [x_le, ys; flipud(x_te), flipud(ys)];
 Xs(:,1) = Xs(:,1) + obj.FrontWingPos;
-GeomObj = BoxWing.cast.GeomObj(Name="Front Wing", Xs=Xs);
+GeomObj = Boxwing.cast.GeomObj(Name="Front Wing", Xs=Xs);
 
 %% Store MAC / AC
 obj.c_ac = (2/3) * c_r * (1 + tr + tr^2) / (1 + tr);
@@ -47,5 +47,5 @@ m_wing = m_struct + m_surfaces;
 m_wing = mean(m_wing);  % average over spanwise stations THIS WAS ADDED TO FIX A BUG, CHECK IF IT'S OKAY
 %m_wing = 7000; % kg
 
-massObj = BoxWing.cast.MassObj(Name="Front Wing", m=m_wing, X=[obj.FrontWingPos + obj.c_ac*0.25; 0]);
+massObj = Boxwing.cast.MassObj(Name="Front Wing", m=m_wing, X=[obj.FrontWingPos + obj.c_ac*0.25; 0]);
 end

@@ -24,7 +24,7 @@ x_te    = x_le + cs;
 Xs = [x_le, ys; flipud(x_te), flipud(ys)];
 Xs(:,1) = Xs(:,1) + obj.RearWingPos;
 
-GeomObj = BoxWing.cast.GeomObj(Name="Rear Wing", Xs=Xs);
+GeomObj = Boxwing.cast.GeomObj(Name="Rear Wing", Xs=Xs);
 
 %%  Mass (Raymer equation with forward sweep corrections) 
 b_w       = b * SI.ft;
@@ -46,6 +46,6 @@ m_wing = (w_wing / SI.lb) * composite_factor * forward_sweep_penalty;
 
 c_mac_rear = (2/3)*c_r*(1 + tr + tr^2)/(1 + tr);
 
-massObj = BoxWing.cast.MassObj(Name="Rear Wing", m=m_wing, ...
+massObj = Boxwing.cast.MassObj(Name="Rear Wing", m=m_wing, ...
                        X=[obj.RearWingPos + c_mac_rear*0.25; 0]);
 end

@@ -7,7 +7,7 @@ function TW_alt = MACS(obj, WS_SI)
 WS_SI = WS_SI(:).';   % force row vector
 
 % Cruise condition
-[rho, a] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+[rho, a] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
 V = obj.TLAR.M_c * a;
 q = 0.5 * rho * V^2;
 

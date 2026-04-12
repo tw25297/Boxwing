@@ -14,8 +14,8 @@ m_ldg = mean(m_ldg); % ASSUMPTION TO DEBUG
 Xwheel = [-0.5,0.25;0.5,0.25;0.5,-0.25;-0.5,-0.25];
 offset = [obj.CockpitLength,0];
 
-GeomObj = BoxWing.cast.GeomObj(Name="Nose Landing Gear",Xs=Xwheel+offset);
-massObj = BoxWing.cast.MassObj(Name="Nose Landing Gear",m=m_ldg,X=offset);
+GeomObj = Boxwing.cast.GeomObj(Name="Nose Landing Gear",Xs=Xwheel+offset);
+massObj = Boxwing.cast.MassObj(Name="Nose Landing Gear",m=m_ldg,X=offset);
 
 % -------------------------- Main Landing Gear ---------------------------
 
@@ -25,8 +25,8 @@ m_ldg = m_ldg ./ SI.lb; % convert to kg
 m_ldg = mean(m_ldg); % ASSUMPTION TO DEBUG
 offset = [obj.x_ac + obj.c_ac*0.5,obj.CabinRadius + 0.5*obj.Engine.Diameter]; % gear sit just inside of engine...
 
-GeomObj(end+1) = BoxWing.cast.GeomObj(Name="Main Right Landing Gear",Xs=Xwheel+offset);
-massObj(end+1) = BoxWing.cast.MassObj(Name="Main Right Landing Gear",m=m_ldg,X=offset);
-GeomObj(end+1) = BoxWing.cast.GeomObj(Name="Main Left Landing Gear",Xs=Xwheel+offset.*[1 -1]);
-massObj(end+1) = BoxWing.cast.MassObj(Name="Main Left Landing Gear",m=m_ldg,X=offset.*[1 -1]);
+GeomObj(end+1) = Boxwing.cast.GeomObj(Name="Main Right Landing Gear",Xs=Xwheel+offset);
+massObj(end+1) = Boxwing.cast.MassObj(Name="Main Right Landing Gear",m=m_ldg,X=offset);
+GeomObj(end+1) = Boxwing.cast.GeomObj(Name="Main Left Landing Gear",Xs=Xwheel+offset.*[1 -1]);
+massObj(end+1) = Boxwing.cast.MassObj(Name="Main Left Landing Gear",m=m_ldg,X=offset.*[1 -1]);
 end

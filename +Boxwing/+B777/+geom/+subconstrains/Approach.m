@@ -10,7 +10,7 @@ Vstall = obj.TLAR.V_app / 1.3;   % [m/s]
 CL_max_landing = obj.CL_max + obj.Delta_Cl_ld;
 
 % Sea-level ISA
-[rho, ~] = BoxWing.cast.atmos(0);
+[rho, ~] = Boxwing.cast.atmos(0);
 
 WS_SI = 0.5 * rho * Vstall^2 * CL_max_landing;   % [N/m²]
 

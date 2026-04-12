@@ -25,7 +25,7 @@ ts  = zeros(1,4);
 
 %% ---- CRUISE ----
 alt = ADP.TLAR.Alt_cruise;
-[rho, a, ~, ~] = BoxWing.cast.atmos(alt);
+[rho, a, ~, ~] = Boxwing.cast.atmos(alt);
 M_cruise = ADP.TLAR.M_c;
 
 % FIX 1: use WingLoading (bounded to 5500-8500 N/m²) not raw MTOM/Area
@@ -65,7 +65,7 @@ end
 
 %% ---- ALTERNATE ----
 altA = ADP.TLAR.Alt_alternate;
-[rhoA, aA, ~, ~] = BoxWing.cast.atmos(altA);
+[rhoA, aA, ~, ~] = Boxwing.cast.atmos(altA);
 M_alt = 0.4;    % low-speed alternate
 VA    = M_alt * aA;
 
@@ -84,7 +84,7 @@ ts(2)  = ADP.TLAR.Range_alternate / VA;
 EWF    = EWF * fs(2);
 
 %% ---- LOITER ----
-[rho0, a0, ~, ~] = BoxWing.cast.atmos(0);
+[rho0, a0, ~, ~] = Boxwing.cast.atmos(0);
 V_loit = 150;   % [m/s]
 Mach_l = V_loit / a0;
 

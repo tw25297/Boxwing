@@ -28,7 +28,7 @@ obj.FrontWingArea    = S_fixed * 0.55;
 obj.RearWingArea     = S_fixed * 0.45;
 obj.Span             = b_eff;
 
-[rho_c, a_c] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+[rho_c, a_c] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
 q_c    = 0.5 * rho_c * (obj.TLAR.M_c * a_c)^2;
 rho_sl = 1.225;
 
@@ -71,7 +71,7 @@ while delta > tol && iter < MAX_ITER
     obj.Thrust           = TW * obj.MTOM * 9.81;
 
     %% Geometry + CG
-    [~, BWMass] = BoxWing.B777.BuildGeometry(obj);
+    [~, BWMass] = Boxwing.B777.BuildGeometry(obj);
     all_x = cellfun(@(x) x(1), {BWMass.X});
     all_m = [BWMass.m];
     x_cg  = sum(all_m .* all_x) / sum(all_m);
@@ -81,12 +81,12 @@ while delta > tol && iter < MAX_ITER
     obj.CL_cruise = max(0.30, min(CL_cruise_new, 0.80));
 
     %% Update aero (silent inside loop)
-    BoxWing.B777.UpdateAero(obj, x_cg, false);
+    Boxwing.B777.UpdateAero(obj, x_cg, false);
 
     %% Mission analysis
     try
         [BlockFuel, TripFuel, ResFuel, Mf_TOC, ~] = ...
-            BoxWing.B777.MissionAnalysis(obj, obj.TLAR.Range, obj.MTOM);
+            Boxwing.B777.MissionAnalysis(obj, obj.TLAR.Range, obj.MTOM);
     catch ME
         fprintf('  FAILED at iter %d: %s\n', iter, ME.message);
         break;
@@ -121,7 +121,7 @@ end
 
 %% Print final aero summary once
 if verbose
-    BoxWing.B777.UpdateAero(obj, x_cg, true);   % verbose=true for final print
+    Boxwing.B777.UpdateAero(obj, x_cg, true);   % verbose=true for final print
     if delta <= tol
         fprintf('  Converged in %d iterations (delta=%.0f kg).\n\n', iter, delta);
     else

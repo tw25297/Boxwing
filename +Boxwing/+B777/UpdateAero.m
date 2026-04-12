@@ -15,7 +15,7 @@ if nargin < 3, verbose = false; end
 % are correct for the boxwing so the warnings are noise, not errors.
 warnState = warning('off', 'all');   % silence during CD0 call
 try
-    [cd0_computed, ~] = BoxWing.B777.CD0(obj);
+    [cd0_computed, ~] = Boxwing.B777.CD0(obj);
     if isfinite(cd0_computed) && cd0_computed > 0.010 && cd0_computed < 0.035
         obj.CD0 = cd0_computed;
     end
@@ -29,7 +29,7 @@ warning(warnState);   % restore warning state
 % This ensures trimDrag and the diagnostic print use the correct CL,
 % not the 0.80 clamp value from the constraint step.
 try
-    [rho_c, a_c] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+    [rho_c, a_c] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
     q_c = 0.5 * rho_c * (obj.TLAR.M_c * a_c)^2;
     Mf_TOC_safe = max(min(obj.Mf_TOC, 1.0), 0.90);
     WS_bounded  = max(min(obj.WingLoading, 8500), 5500);
@@ -40,9 +40,9 @@ end
 
 %% Step 3: build polar
 if isempty(x_cg)
-    obj.AeroPolar = BoxWing.B777.AeroPolar(obj);
+    obj.AeroPolar = Boxwing.B777.AeroPolar(obj);
 else
-    obj.AeroPolar = BoxWing.B777.AeroPolar(obj, x_cg);
+    obj.AeroPolar = Boxwing.B777.AeroPolar(obj, x_cg);
 end
 
 %% Step 4: optional single diagnostic line

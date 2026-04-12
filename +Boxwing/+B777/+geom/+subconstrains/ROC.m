@@ -10,7 +10,7 @@ WS = WS(:).';   % force row vector
 ROC_req = (obj.TLAR.ROC_min_at_cruise / 3.28084) / 60;   % ft/min → m/s
 
 % Atmosphere at cruise altitude
-[rho, a] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+[rho, a] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
 V = obj.TLAR.M_c * a;
 q = 0.5 * rho * V^2;
 

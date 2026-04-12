@@ -16,11 +16,11 @@ Xs_L = [x_front,   -half_f;
         x_front+c, -half_f];
 Xs_R = Xs_L;  Xs_R(:,2) = -Xs_R(:,2);
 
-GeomObj    = BoxWing.cast.GeomObj(Name="Left Connector",  Xs=Xs_L);
-GeomObj(2) = BoxWing.cast.GeomObj(Name="Right Connector", Xs=Xs_R);
+GeomObj    = Boxwing.cast.GeomObj(Name="Left Connector",  Xs=Xs_L);
+GeomObj(2) = Boxwing.cast.GeomObj(Name="Right Connector", Xs=Xs_R);
 
 %% Mass  (VTP-style Raymer)
-[rho, a] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+[rho, a] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
 q_c      = 0.5 * rho * (obj.TLAR.M_c * a)^2;
 
 S_conn  = h * c;
@@ -39,6 +39,6 @@ m_c = (m_c/SI.lb) * 1.30 * 0.70;   % assuming +30% attach, -30% CFRP
 m_c = mean(m_c);  % ASSUMPTION MADE TO DEBUG
 x_cg = (x_front + x_rear)/2 + c/2;
 
-massObj    = BoxWing.cast.MassObj(Name="Left Connector",  m=m_c, X=[x_cg; -half_f]);
-massObj(2) = BoxWing.cast.MassObj(Name="Right Connector", m=m_c, X=[x_cg;  half_r]);
+massObj    = Boxwing.cast.MassObj(Name="Left Connector",  m=m_c, X=[x_cg; -half_f]);
+massObj(2) = Boxwing.cast.MassObj(Name="Right Connector", m=m_c, X=[x_cg;  half_r]);
 end

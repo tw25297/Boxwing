@@ -23,18 +23,18 @@ if nargin < 2, doPlot = true; end
 WS = linspace(3000, 10000, 300);   % [N/m^2]  realistic range for wide-body
 
 %% ── T/W constraint curves (each returns 1×N) ─────────────────────────────
-TW_to   = BoxWing.B777.geom.subconstrains.TOL(obj,  WS);
-TW_roc  = BoxWing.B777.geom.subconstrains.ROC(obj,  WS);
-TW_tocg = BoxWing.B777.geom.subconstrains.TOCG(obj, WS);
-TW_macs = BoxWing.B777.geom.subconstrains.MACS(obj, WS);
+TW_to   = Boxwing.B777.geom.subconstrains.TOL(obj,  WS);
+TW_roc  = Boxwing.B777.geom.subconstrains.ROC(obj,  WS);
+TW_tocg = Boxwing.B777.geom.subconstrains.TOCG(obj, WS);
+TW_macs = Boxwing.B777.geom.subconstrains.MACS(obj, WS);
 
 % Envelope = maximum T/W requirement at each W/S
 TW_env = max([TW_to; TW_roc; TW_tocg; TW_macs], [], 1);
 
 %% ── Vertical (max W/S) constraints ───────────────────────────────────────
-WSmax_lfl      = BoxWing.B777.geom.subconstrains.LFL(obj);       % landing field
-WSmax_approach = BoxWing.B777.geom.subconstrains.Approach(obj);  % stall speed
-WSmax_ceiling  = BoxWing.B777.geom.subconstrains.Ceiling(obj);   % cruise ceiling
+WSmax_lfl      = Boxwing.B777.geom.subconstrains.LFL(obj);       % landing field
+WSmax_approach = Boxwing.B777.geom.subconstrains.Approach(obj);  % stall speed
+WSmax_ceiling  = Boxwing.B777.geom.subconstrains.Ceiling(obj);   % cruise ceiling
 
 % Convert from lb/ft² back to N/m² (subconstraints return lb/ft²)
 lbft_to_SI = 1 / 0.020885;   % 1 lb/ft² = 47.88 N/m²  →  1/0.020885
@@ -69,7 +69,7 @@ else
 end
 
 % Convert cruise T/W → SLS using turbofan lapse  T_SLS ~ T_alt / (rho/rho_sl)^0.75
-[rho_c, ~] = BoxWing.cast.atmos(obj.TLAR.Alt_cruise);
+[rho_c, ~] = Boxwing.cast.atmos(obj.TLAR.Alt_cruise);
 rho_sl      = 1.225;
 lapse       = (rho_c / rho_sl)^0.75;
 TW_SLS      = TW_design_cruise / lapse;

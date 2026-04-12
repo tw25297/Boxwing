@@ -9,7 +9,7 @@ classdef GeomObj
     methods
         function obj = GeomObj(opts)
             arguments
-                opts.?BoxWing.cast.GeomObj
+                opts.?Boxwing.cast.GeomObj
             end
             for prop = string(fieldnames(opts))'
                 obj.(prop) = opts.(prop);

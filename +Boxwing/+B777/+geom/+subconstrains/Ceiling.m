@@ -14,7 +14,7 @@ end
 M         = obj.TLAR.M_c;
 CL_ceiling = 1.0;   % Corke: CL~1.0 for ceiling sizing
 
-[rho, a] = BoxWing.cast.atmos(h);
+[rho, a] = Boxwing.cast.atmos(h);
 q = 0.5 * rho * (M * a)^2;
 
 WSmax_SI            = CL_ceiling * q;            % [N/m²]

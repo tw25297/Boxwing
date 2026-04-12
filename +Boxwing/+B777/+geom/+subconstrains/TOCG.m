@@ -10,7 +10,7 @@ WS = WS(:).';   % force row vector
 G_min = 0.024;   % FAR 25 twin OEI second segment
 
 % Sea-level atmosphere
-[rho, ~] = BoxWing.cast.atmos(0);
+[rho, ~] = Boxwing.cast.atmos(0);
 
 CLmax_TO = obj.CL_max + obj.Delta_Cl_to;
 Vs_TO    = sqrt(2 .* WS ./ (rho .* CLmax_TO));

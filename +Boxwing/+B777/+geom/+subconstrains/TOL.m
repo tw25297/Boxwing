@@ -11,7 +11,7 @@ sTO_req_ft = adp.TLAR.GroundRun * 3.28084;   % m → ft
 
 % Airport atmosphere (SL, ISA + hot-day offset)
 delta_T = adp.TLAR.ISA_deltaT_TO;
-[~, ~, ~, ~, ~, ~, sigma] = BoxWing.cast.atmos(0, delta_T);
+[~, ~, ~, ~, ~, ~, sigma] = Boxwing.cast.atmos(0, delta_T);
 
 % CLmax at take-off
 CL_max_TO = adp.CL_max + adp.Delta_Cl_to;
