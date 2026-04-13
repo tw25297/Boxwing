@@ -1,173 +1,257 @@
-function [GeomObj, massObj] = fuselage(obj)
-%FUSELAGE  Fuselage structure + all aircraft systems for boxwing freighter.
-%  Mass fractions calibrated against A350F/B777F published OEM data.
-%  Reference: Torenbeek App.C, Raymer Ch.15, Jane's All The World's Aircraft.
-%  Target: OEM ~ 40-46% of MTOW (A350F=46%, B777F=44%).
+function [GeomObj,massObj] = fuselage(obj)
+% fuselage - Builds the fuselage geometry and high-fidelity segmented mass
+%            model for a B777F-like Box-Wing aircraft.
 %
-%  All items named to avoid OEM filter exclusion:
-%  (Do NOT name anything starting with "Fuel " or "Payload")
+% Mass model overview:
+%   1. Raymer correlation gives an aluminium-equivalent baseline mass.
+%   2. Fuselage is split into 6 functional segments (nose, cockpit, forward
+%      barrel, wing-box bay, aft barrel, tailcone) with calibrated per-metre
+%      mass multipliers that rescale to match the Raymer total exactly.
+%   3. Each segment is further split into skin+stringers vs frames+bulkheads
+%      using the fus_ratio_skin / fus_ratio_frames parameters from ADP_BW.
+%   4. A CFRP fraction and Kmat weight-saving factor are applied independently
+%      to skins and frames in every segment.
+%   5. A nose cargo-door structural penalty is added as a separate MassObj.
+%
+% Output massObj entries (in order):
+%   Fuselage Nose | Fuselage Cockpit | Fuselage Fwd Barrel |
+%   Fuselage WingBox | Fuselage Aft Barrel | Fuselage Tailcone |
+%   Nose Cargo Door | Systems | Fuel Systems
 
-L_f   = obj.CockpitLength + obj.CabinLength + obj.CabinRadius * 1.48;
-MTOM  = obj.MTOM;
-M_dg  = MTOM * obj.Mf_TOC * SI.lb;    % design gross weight [lb]
-n_z   = 2.5 * 1.5;                     % ultimate load factor
-D     = (2 * obj.CabinRadius) * SI.ft; % fuselage diameter [ft]
-L_ft  = L_f * SI.ft;                   % fuselage length [ft]
 
-%% Geometry (top-view outline)
-theta = linspace(0,pi,101)';
+%% =====================================================================
+%  1.  FUSELAGE GEOMETRY
+% ======================================================================
+
+% Total fuselage length  [m]
+L_f = obj.CockpitLength + obj.CabinLength + obj.CabinRadius * 1.48;
+
+% --- Nose / cockpit profile (half-ellipse swept back) ---
+theta = linspace(0, pi, 101)';
 Xs = [-sin(theta)*obj.CockpitLength, cos(theta)*obj.CabinRadius];
-theta = linspace(pi,0,101)';
-Xs = [Xs;
-      sin(theta)*obj.CabinRadius*2*2.48 + (obj.CabinLength-obj.CabinRadius*2), ...
-      cos(theta)*obj.CabinRadius];
+
+% --- Tailcone profile ---
+theta = linspace(pi, 0, 101)';
+Xs = [Xs; ...
+    sin(theta)*obj.CabinRadius*2*2.48 + (obj.CabinLength - obj.CabinRadius*2), ...
+    cos(theta)*obj.CabinRadius];
+
+% Shift so x = 0 at nose tip
 Xs(:,1) = Xs(:,1) + obj.CockpitLength;
-GeomObj = Boxwing.cast.GeomObj(Name="Fuselage", Xs=Xs);
+GeomObj = cast.GeomObj(Name="Fuselage", Xs=Xs);
 
-%%  1. Fuselage Structure  (Raymer 15.7 and CFRP factor 0.78) 
-K_d = 1.04;   K_Lg = 1.12;
-S_f = pi*D*(obj.CabinLength*SI.ft) ...
-    + pi*(obj.CabinLength*SI.ft)*(obj.CabinRadius*SI.ft) ...
-    + pi*(1.48*obj.CabinRadius*SI.ft)*(obj.CabinRadius*SI.ft);
-W_fus = 0.3280 * K_d * K_Lg * sqrt(M_dg*n_z) ...
-      * L_f^0.25 * S_f^0.302 * (L_f/D)^0.10;
-m_fus = (W_fus / SI.lb) * 0.78;    % assuming 22% CFRP saving
-% WARNING
-m_fus = mean(m_fus);  % ASSUMPTION MADE TO DEBUG
-massObj = Boxwing.cast.MassObj(Name="Fuselage Structure", m=m_fus, X=[L_f/2; 0]);
 
-%% 2. Flight Controls  
-% Fly-by-wire system: actuators, control surfaces, sensors, computers.
-% Fraction method (Raymer 15.6 over-predicts for large aircraft):
-%   B777:  ~8000 kg = 2.7% MTOW
-%   A350:  ~6000 kg = 1.9% MTOW  (more-electric, lighter actuators)
-%   Boxwing: extra surfaces (8 control surfaces vs 4) -> 2.8%
-m_fc = 0.028 * MTOM;
-% WARNING
-m_fc = mean(m_fc);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Flight Controls", m=m_fc, X=[L_f/2; 0]);
+%% =====================================================================
+%  2.  RAYMER ALUMINIUM BASELINE MASS
+% ======================================================================
 
-%%  3. Air Conditioning & Pressurisation  
-% Environmental Control System (ECS):
-%   B777:  ~7500 kg = 2.5% MTOW
-%   A350:  ~6000 kg = 1.9% MTOW  (electric ECS, no bleed)
-%   Boxwing: conventional bleed-air -> 2.2%
-m_ac = 0.022 * MTOM;
-% WARNING
-m_ac = mean(m_ac);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Air Conditioning", m=m_ac, X=[L_f*0.45; 0]);
+K_d  = 1.12;                                   % transport damage factor
+K_Lg = 1.12;                                   % fuselage-mounted LG factor
+M_dg = obj.MTOM * obj.Mf_TOC * SI.lb;         % design gross weight at TOC [lb]
+n_z  = 2.5 * 1.5;                              % ultimate manoeuvre load factor
+D    = (2 * obj.CabinRadius) * SI.ft;          % max fuselage diameter [ft]
+b_w  = obj.Span * SI.ft;                       % wing span [ft]
 
-%%  4. Ice Protection  
-% Hot-air wing LE + electrothermal tail LE:
-%   Typical wide-body: 0.2% MTOW
-m_ice = 0.002 * MTOM;
-% WARNING
-m_ice = mean(m_ice);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Ice Protection", m=m_ice, X=[L_f*0.3; 0]);
+% Quarter-chord sweep and taper ratio
+SweepQtrChord = real(acosd(0.75 .* obj.Mstar ./ obj.TLAR.M_c));  % [deg]
+tr = -0.0083 * SweepQtrChord + 0.4597;
 
-%%  5. Fire Protection  
-% Engine bay, APU bay, cargo hold suppression systems
-m_fire = 0.003 * MTOM;    % ~960 kg for 319t
-% WARNING
-m_fire = mean(m_fire);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Fire Protection", m=m_fire, X=[L_f/2; 0]);
+% Raymer K_ws (wing-fuselage bending relief)
+K_ws = 0.75 * ((1 + 2*tr) / (1 + tr)) * (b_w / L_f) * tand(SweepQtrChord);
 
-%%  6. Avionics  (Raymer eq 15.8) 
-% W_av = 2.117 * W_uav^0.933  [lb]
-W_uav   = 800 * SI.lb;
-m_avion = 2.117 * W_uav^0.933 / SI.lb;   % ~1026 kg
-% WARNING
-m_avion = mean(m_avion);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Avionics", m=m_avion, X=[obj.CockpitLength*0.5; 0]);
+% Box-wing corrections: distributed lift reduces peak fuselage bending
+k_bw_n  = 0.80;    % reduced effective load factor (20% relief from rear wing)
+k_bw_K  = 0.85;    % smaller wing-span influence term
+n_z_eff = k_bw_n * n_z;
+K_ws    = k_bw_K  * K_ws;
 
-%%  7. Hydraulics  
-% 3 independent circuits (normal / alternate / emergency)
-%   B777: ~6000 kg = 2.0% MTOW
-%   A350: ~3500 kg (partial electric backup) = 1.1%
-%   Boxwing (un-conventional): 1.8%
-m_hyd = 0.018 * MTOM;
-% WARNING
-m_hyd = mean(m_hyd);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Hydraulics", m=m_hyd, X=[L_f/2; 0]);
+% First-order fuselage wetted area [ft^2]
+S_f = pi*D*(obj.CabinLength*SI.ft) + ...
+      pi*(obj.CabinLength*SI.ft)*(obj.CabinRadius*SI.ft) + ...
+      pi*(1.48*obj.CabinRadius*SI.ft)*(obj.CabinRadius*SI.ft);
 
-%% 8. Electrical Systems  (Raymer eq 15.12) 
-% W_el = 7.291 * R_kva^0.782 * L_ft^0.346 * N_gen^0.1  [lb]
-R_kva = 400;   N_gen = 4;
-m_elec = 7.291 * R_kva^0.782 * L_ft^0.346 * N_gen^0.1 / SI.lb;  % ~2642 kg
-% WARNING
-m_elec = mean(m_elec);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Electrical Systems", m=m_elec, X=[L_f/2; 0]);
+% Raymer transport fuselage weight [lb]
+W_fus_lb = 0.3280 * K_d * K_Lg * sqrt(M_dg * n_z_eff) * ...
+           (L_f^0.25) * (S_f^0.302) * ((1 + K_ws)^0.04) * ((L_f / D)^0.10);
 
-%% 9. APU  
-m_apu = 1200;   % kg — Honeywell HGT1700 class
-massObj(end+1) = Boxwing.cast.MassObj(Name="APU", m=m_apu, X=[L_f*0.92; 0]);
+% Aluminium-equivalent baseline mass [kg]  (x1.5 = Raymer lb-to-kg empirical scale)
+m_fus_Al = W_fus_lb / SI.lb * 1.5;
 
-%%  10. Cargo Handling System  
-% Floor rollers, ball mats, net rails, tie-downs, Cargo Loading System unit
-%   B777F: ~5500 kg = 1.8% MTOW
-%   A350F: ~5000 kg = 1.6% MTOW
-m_cargo = 0.017 * MTOM;
-% WARNING
-m_cargo = mean(m_cargo);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Cargo Handling", m=m_cargo, X=[L_f*0.50; 0]);
 
-%% 11. Oxygen & Safety Equipment  
-m_oxy = 400 + obj.TLAR.Crew * 15;
-% WARNING
-m_oxy = mean(m_oxy);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Oxygen & Safety", m=m_oxy, X=[obj.CockpitLength; 0]);
+%% =====================================================================
+%  3.  SEGMENT LENGTHS
+% ======================================================================
 
-%%  12. Interior Finish  
-% Freighter: acoustic lining, floor panels, cargo compartment walls
-%   ~1% MTOW
-m_int = 0.010 * MTOM;
-% WARNING
-m_int = mean(m_int);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Interior Finish", m=m_int, X=[L_f*0.5; 0]);
+% Primary fuselage divisions  [m]
+L_cockpit  = obj.CockpitLength;
+L_cabin    = obj.CabinLength;
+L_tailcone = obj.CabinRadius * 1.48;   % matches geometry definition above
 
-%% 13. Unusable Fuel & Trapped Oil  
-m_unusable = 0.010 * MTOM * obj.Mf_Fuel;
-% WARNING
-m_unusable = mean(m_unusable);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Unusable Fuel & Oil", m=m_unusable, X=[L_f/2; 0]);
+% Split cockpit into unpressurised nose cone and pressurised cockpit shell
+L_nose = 0.40 * L_cockpit;   % forward 40% -> ogive / nose cone
+L_cpit = 0.60 * L_cockpit;   % aft 60%     -> pressurised cockpit bay
 
-%% 14. Paint  
-m_paint = 0.004 * MTOM;   
-% WARNING
-m_paint = mean(m_paint);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Paint", m=m_paint, X=[L_f/2; 0]);
+% Wing-box bay length approx 1.2 x fuselage diameter (spans wing carry-through frame)
+L_wbox = 1.2 * (2 * obj.CabinRadius);
 
-%%  15. Tank Systems  (Raymer eq 15.11) 
-% W_fs = 2.405 * V_t^0.606 * N_t^0.5 * N_eng^0.5  [lb]
-FuelMass = MTOM * obj.Mf_Fuel;
-V_t_gal  = (FuelMass / Boxwing.cast.eng.Fuel.JA1.Density * SI.litre) / 3.785;
-m_tanks  = 2.405 * V_t_gal^0.606 * 4^0.5 * 2^0.5 / SI.lb;
-% WARNING
-m_tanks = mean(m_tanks);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Tank Systems", m=m_tanks, X=[L_f/2; 0]);
+% Remaining cabin length split equally fore and aft of the wing box
+L_fwdBar = max(0.0,  0.5 * (L_cabin - L_wbox));
+L_aftBar = max(0.0,  0.5 * (L_cabin - L_wbox));
 
-%%  16. Wiring Harness  
-% Electrical wiring throughout aircraft body and wings:
-%   B777: ~8000 kg = 2.7% MTOW (320 km of wire!)
-%   A350: ~5000 kg = 1.6% MTOW (CFRP structure, shorter runs)
-%   Boxwing: 2.0% MTOW
-m_wiring = 0.020 * MTOM;
-% WARNING
-m_wiring = mean(m_wiring);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Wiring Harness", m=m_wiring, X=[L_f/2; 0]);
 
-%%  17. Manufacturing & Weight Growth Margin  
-% Standard 2% structural mass margin for weight growth during development.
-% Accounts for: fasteners, sealants, shimming, as-built vs design mass.
-m_margin = 0.020 * MTOM;
-% WARNING
-m_margin = mean(m_margin);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Weight Margin (2%)", m=m_margin, X=[L_f/2; 0]);
+%% =====================================================================
+%  4.  ALUMINIUM SEGMENT MASSES  (calibrated to Raymer total)
+% ======================================================================
+% Average mass per metre, then scale each segment by its structural
+% intensity multiplier (kseg_* from ADP_BW).  The entire array is then
+% renormalised so that the sum equals m_fus_Al exactly.
 
-%%  18. Operator Items  
-m_oper = obj.TLAR.CrewMass + 800;   % assuming crew mass + 800 kg misc
-% WARNING
-m_oper = mean(m_oper);  % ASSUMPTION MADE TO DEBUG
-massObj(end+1) = Boxwing.cast.MassObj(Name="Operator Items", m=m_oper, X=[obj.CockpitLength*0.5; 0]);
+w0 = m_fus_Al / L_f;   % average fuselage mass per metre [kg/m]
+
+% Segment multipliers from ADP properties
+kN  = obj.kseg_nose;        % 0.8  - light ogive structure
+kC  = obj.kseg_cockpit;     % 1.3  - complex cutouts, pressurised
+kFB = obj.kseg_fwdBarrel;   % 1.0  - nominal barrel
+kWB = obj.kseg_wingbox;     % 1.4  - heavy carry-through frames
+kAB = obj.kseg_aftBarrel;   % 0.9  - aft barrel, slightly lighter
+kTC = obj.kseg_tailcone;    % 0.7  - tapered, lightly loaded
+
+% Raw segment masses before renormalisation
+m_nose_Al     = kN  * w0 * L_nose;
+m_cpit_Al     = kC  * w0 * L_cpit;
+m_fwdBar_Al   = kFB * w0 * L_fwdBar;
+m_wbox_Al     = kWB * w0 * L_wbox;
+m_aftBar_Al   = kAB * w0 * L_aftBar;
+m_tailcone_Al = kTC * w0 * L_tailcone;
+
+% Renormalise so segments sum exactly to Raymer baseline
+m_sum = m_nose_Al + m_cpit_Al + m_fwdBar_Al + m_wbox_Al + m_aftBar_Al + m_tailcone_Al;
+scale = m_fus_Al / m_sum;
+
+m_nose_Al     = m_nose_Al     * scale;
+m_cpit_Al     = m_cpit_Al     * scale;
+m_fwdBar_Al   = m_fwdBar_Al   * scale;
+m_wbox_Al     = m_wbox_Al     * scale;
+m_aftBar_Al   = m_aftBar_Al   * scale;
+m_tailcone_Al = m_tailcone_Al * scale;
+
+
+%% =====================================================================
+%  5.  SKIN / FRAME SPLIT AND CFRP WEIGHT CORRECTION
+% ======================================================================
+% For each segment the corrected mass is:
+%
+%   m_corr = m_Al * [ rs*((1 - fC_s) + Ks*fC_s)
+%                   + rf*((1 - fC_f) + Kf*fC_f) ]
+%
+%   rs, rf  = skin and frame mass fractions (0.45 / 0.55)
+%   fC_s    = CFRP fraction within skins for this segment   (from ADP_BW)
+%   fC_f    = CFRP fraction within frames for this segment  (from ADP_BW)
+%   Ks      = Kmat for CFRP skins  (0.78 -> 22% mass saving vs Al)
+%   Kf      = Kmat for CFRP frames (0.85 -> 15% mass saving vs Al)
+
+rs = obj.fus_ratio_skin;    % 0.45
+rf = obj.fus_ratio_frames;  % 0.55
+Ks = obj.Kmat_skin;         % 0.78
+Kf = obj.Kmat_frame;        % 0.85
+
+% Anonymous helper keeps the per-segment lines concise
+corrFn = @(m_al, fCs, fCf) m_al * ( rs*((1-fCs) + Ks*fCs) + ...
+                                     rf*((1-fCf) + Kf*fCf) );
+
+% --- Nose (ogive, unpressurised) ---
+% Skin 30% CFRP | Frame 20% CFRP
+% Simple ogive skin; minimal frames -> modest composite adoption
+m_nose_corr     = corrFn(m_nose_Al,     obj.fCFRP_skin_nose,     obj.fCFRP_frame_nose);
+
+% --- Cockpit shell (pressurised, complex window & door cutouts) ---
+% Skin 40% CFRP | Frame 25% CFRP
+% Matches A350 / B787 cockpit skin practice (~40% CFRP)
+m_cpit_corr     = corrFn(m_cpit_Al,     obj.fCFRP_skin_cockpit,  obj.fCFRP_frame_cockpit);
+
+% --- Forward barrel (main cargo bay, uniform pressure vessel) ---
+% Skin 60% CFRP | Frame 35% CFRP
+% Long uniform barrel suits CFRP panel manufacture (B777X barrel ~55-65%)
+m_fwdBar_corr   = corrFn(m_fwdBar_Al,   obj.fCFRP_skin_barrel,   obj.fCFRP_frame_barrel);
+
+% --- Wing-box bay (carry-through frames, heavy local reinforcement) ---
+% Skin 60% CFRP | Frame 35% CFRP
+% Wing carry-through frames are thick Al or Ti; only skin panels switch to CFRP
+m_wbox_corr     = corrFn(m_wbox_Al,     obj.fCFRP_skin_wingbox,  obj.fCFRP_frame_wingbox);
+
+% --- Aft barrel (mirror of forward barrel) ---
+% Skin 60% CFRP | Frame 35% CFRP
+m_aftBar_corr   = corrFn(m_aftBar_Al,   obj.fCFRP_skin_aft,      obj.fCFRP_frame_aft);
+
+% --- Tailcone (tapered, lightly loaded) ---
+% Skin 70% CFRP | Frame 30% CFRP
+% Thin tapered shell is an ideal CFRP application; few frames
+m_tailcone_corr = corrFn(m_tailcone_Al, obj.fCFRP_skin_tailcone, obj.fCFRP_frame_tailcone);
+
+% Total corrected fuselage structural mass
+m_fus_corr = m_nose_corr + m_cpit_corr + m_fwdBar_corr + ...
+             m_wbox_corr + m_aftBar_corr + m_tailcone_corr;
+
+% Diagnostic: print mass reduction factor (expected range 0.90 - 0.96)
+FusMassReduction = m_fus_corr / m_fus_Al;
+fprintf('  [fuselage] Al baseline: %.0f kg | CFRP-corrected: %.0f kg | reduction factor: %.3f\n', ...
+        m_fus_Al, m_fus_corr, FusMassReduction);
+
+
+%% =====================================================================
+%  6.  NOSE CARGO-DOOR STRUCTURAL PENALTY
+% ======================================================================
+% A freighter nose door (hinge reinforcements, door skin, actuators,
+% latches) adds approximately 1.5-3% of corrected fuselage mass.
+% k_door = 0.02 (2%) is set in ADP_BW.
+
+m_door = obj.k_door * m_fus_corr;
+
+
+%% =====================================================================
+%  7.  REPRESENTATIVE CG X-LOCATIONS FOR EACH SEGMENT
+% ======================================================================
+
+x_nose     = 0.20 * L_nose;
+x_cpit     = L_nose + 0.50 * L_cpit;
+x_fwdBar   = L_cockpit + 0.50 * L_fwdBar;
+x_wbox     = obj.WingPos;                              % centre of wing carry-through bay
+x_aftBar   = L_cockpit + L_fwdBar + L_wbox + 0.50 * L_aftBar;
+x_tailcone = L_f - 0.30 * L_tailcone;
+x_door     = L_nose + 0.50 * L_cpit;                  % door hinge at cockpit / nose junction
+
+
+%% =====================================================================
+%  8.  ASSEMBLE MASS OBJECTS
+% ======================================================================
+
+massObj        = cast.MassObj(Name="Fuselage Nose",       m=m_nose_corr,     X=[x_nose;     0]);
+massObj(end+1) = cast.MassObj(Name="Fuselage Cockpit",    m=m_cpit_corr,     X=[x_cpit;     0]);
+massObj(end+1) = cast.MassObj(Name="Fuselage Fwd Barrel", m=m_fwdBar_corr,   X=[x_fwdBar;   0]);
+massObj(end+1) = cast.MassObj(Name="Fuselage WingBox",    m=m_wbox_corr,     X=[x_wbox;     0]);
+massObj(end+1) = cast.MassObj(Name="Fuselage Aft Barrel", m=m_aftBar_corr,   X=[x_aftBar;   0]);
+massObj(end+1) = cast.MassObj(Name="Fuselage Tailcone",   m=m_tailcone_corr, X=[x_tailcone; 0]);
+massObj(end+1) = cast.MassObj(Name="Nose Cargo Door",     m=m_door,          X=[x_door;     0]);
+
+
+%% =====================================================================
+%  9.  SYSTEMS MASS  (unchanged from original formulation)
+% ======================================================================
+
+m_sys = (270*(2*obj.CabinRadius) + 150) * L_f / 9.81 * 2;
+massObj(end+1) = cast.MassObj(Name="Systems", m=m_sys, X=[L_f/2; 0]);
+
+
+%% =====================================================================
+%  10. FUEL SYSTEM MASS  (Torenbeek, unchanged from original)
+% ======================================================================
+
+FuelMass   = obj.MTOM * obj.Mf_Fuel;
+N_fuelTank = 3;    % two wing tanks + one centre tank
+V_t        = FuelMass / cast.eng.Fuel.JA1.Density * SI.litre;  % total volume [litres]
+N_eng      = 2;
+
+m_fuelsys = 36.3*(N_eng + N_fuelTank - 1) + 4.366*N_fuelTank^0.5 * V_t^(1/3);  % [kg]
+massObj(end+1) = cast.MassObj(Name="Fuel Systems", m=m_fuelsys, X=[L_f/2; 0]);
 
 end

@@ -118,9 +118,48 @@ classdef ADP < handle
 
     % Fuselage geometry
     properties
-        CockpitLength = 6.5;
-        CabinRadius   = 2.93;
-        CabinLength   = 0;
+        CockpitLength = 7.3;
+        CabinRadius   = 2.8;
+        CabinLength   = 70.8 - 7.3 - 2.8*2*1.48;
+    end
+
+    properties
+        % Primary structure mass split (must sum to 1.0)
+        fus_ratio_skin   = 0.45;   % skin + stringers fraction
+        fus_ratio_frames = 0.55;   % frames + bulkheads fraction
+
+        % CFRP mass fractions -- skin group, per segment
+        fCFRP_skin_nose     = 0.30;
+        fCFRP_skin_cockpit  = 0.40;
+        fCFRP_skin_barrel   = 0.60;   % applied to both forward and aft barrel
+        fCFRP_skin_wingbox  = 0.60;
+        fCFRP_skin_aft      = 0.60;
+        fCFRP_skin_tailcone = 0.70;
+
+        % CFRP mass fractions -- frame group, per segment
+        fCFRP_frame_nose     = 0.20;
+        fCFRP_frame_cockpit  = 0.25;
+        fCFRP_frame_barrel   = 0.35;  % applied to both forward and aft barrel
+        fCFRP_frame_wingbox  = 0.35;
+        fCFRP_frame_aft      = 0.35;
+        fCFRP_frame_tailcone = 0.30;
+
+        % CFRP weight-saving factors relative to aluminium-equivalent baseline
+        Kmat_skin  = 0.78;   % 22% saving for CFRP skins vs Al 2024-T3
+        Kmat_frame = 0.85;   % 15% saving for CFRP frames vs Al 2024-T3
+
+        % Segment mass-intensity multipliers (mass per metre / fuselage average)
+        kseg_nose      = 0.8;
+        kseg_cockpit   = 1.3;
+        kseg_fwdBarrel = 1.0;
+        kseg_wingbox   = 1.4;
+        kseg_aftBarrel = 0.9;
+        kseg_tailcone  = 0.7;
+
+        % Nose cargo-door structural penalty (fraction of corrected fuselage mass)
+        % 2% covers hinge reinforcements, door skin, actuators and latching
+        % structure for an upward-opening nose door (ref: 747-8F installation).
+        k_door = 0.02;
     end
 
     properties
