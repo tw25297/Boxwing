@@ -34,8 +34,6 @@ total_block_fuel = 0;
 total_trip_fuel  = 0;
 total_landings   = 0;
 total_time_hr    = 0;
-total_ATR_CO2    = 0;
-total_ATR_NOx    = 0;
 
 for i = 1:n_legs
     leg = sched(i);
@@ -106,7 +104,7 @@ for i = 1:n_legs
     atr100_co2      = m_co2 * a_co2;
     atr100_nox      = m_nox * (a_nox_o3s + a_nox_o3l); 
     atr100_h2o      = m_h2o * a_h2o;
-    atr100_contrail = (leg_dist_m/1000) * a_contrail_km;
+    atr100_contrail = leg_dist_m * a_contrail_km;
     atr100_total = atr100_co2 + atr100_nox + atr100_h2o + atr100_contrail;
     
 

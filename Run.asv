@@ -382,13 +382,11 @@ fprintf('===========================================================\n');
 fprintf('   DIRECT OPERATING COST (DOC)\n');
 fprintf('===========================================================\n\n');
 
-fleet_size = 6;  SAF_ratio = 1;  T_max_K = 1835; T_max = 380; %kN
-% ADP.Engine.T_static = T_max;
-% [DOC_total, docBreakdown, ~, total_init, ~, ~] = Boxwing.script.DOC( ...
-%     ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
-%     fleet_size, SAF_ratio, ADP.TLAR.M_c, T_max_K);
-[~, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, fleet_size, SAF_ratio);
-[DOC_total, docBreakdown, total_init] = Boxwing.script.DOC(ADP, fleet_size, SAF_ratio, per_leg, T_max);
+fleet_size = 10;  SAF_ratio = 0.0;  T_max_K = 1850;
+[DOC_total, docBreakdown, ~, total_init, ~, ~] = Boxwing.script.DOC( ...
+    ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
+    fleet_size, SAF_ratio, ADP.TLAR.M_c, T_max_K);
+function [DOC, breakdown] = DOC(ADP, fleet_size, SAF_ratio, per_leg)
 fprintf('  Fleet=%d  SAF=%.0f%%\n\n  DOC Breakdown:\n', fleet_size, SAF_ratio*100);
 dfields = fieldnames(docBreakdown);
 for k = 1:length(dfields)
@@ -858,16 +856,13 @@ fprintf('║   MISSION VISUALISATION + SENSITIVITY ANALYSIS           ║\n');
 fprintf('╚══════════════════════════════════════════════════════════╝\n\n');
  
 % ── Pre-compute baseline DOC and ATR ─────────────────────────────────────
-% [DOC_base, docBD] = Boxwing.script.DOC( ...
-%     ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
-%     fleet_size, SAF_ratio, ADP.TLAR.M_c, T_MAX_K);
-[season, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, fleet_size, SAF_ratio);
-[DOC_base, docBD, ~] = DOC(ADP, fleet_size, SAF_ratio, per_leg);
-ATR_base = season.ATR_total; 
-% [ATR_base, ~] = Boxwing.cast.eng.Engine_code( ...
-%     ADP.MTOM, ADP.OEM, ADP.WingArea, ADP.AR_target, ...
-%     ADP.TLAR.Range/1e3, ADP.TLAR.M_c);
-% [ATR_base, ~] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, N_fleet, SAF_ratio);
+[DOC_base, docBD] = Boxwing.script.DOC( ...
+    ADP.MTOM/1e3, ADP.OEM, sizing_out.BlockFuel, ...
+    fleet_size, SAF_ratio, ADP.TLAR.M_c, T_MAX_K);
+ 
+[ATR_base, ~] = Boxwing.cast.eng.Engine_code( ...
+    ADP.MTOM, ADP.OEM, ADP.WingArea, ADP.AR_target, ...
+    ADP.TLAR.Range/1e3, ADP.TLAR.M_c);
  
 fprintf('  Baseline DOC : $%.2f M/season\n', DOC_base/1e6);
 fprintf('  Baseline ATR : %.4e K\n\n', ATR_base);

@@ -1,64 +1,66 @@
-function [ATR100, climate_bd] = Engine_code(MTOM, OEW, s_ref, ar, range_km,  mach)
-    % Global Parameters
-    m_tom = MTOM;             
-    m_oew = OEW;               
-    m_payload = m_tom - m_oew;            
-    %s_ref = s_ref;                
-    %ar = ar;                    
-    e_app = 1.80;                 
-    cd0 = 0.0221;                 
-    k = 1 / (pi * ar * e_app);    
-    g = 9.80665;                  
-
-    % Propulsion Profile
-    eng_fn0 = 362300;             
-    eng_sfc_a = 1.41e-5;          
-    eng_sfc_b = 0.48e-5;          
-
-    % Mission 
-    % range_km = range;        
-    alt_m = 10668;                
-    % mach = 0.80;                  
-
-    [T_cruise, a_cruise, p_cruise, rho_cruise] = atmosisa(alt_m);
-    [T_sl, a_sl, p_sl, rho_sl] = atmosisa(0);
+% function [ATR100, climate_bd] = Engine_code(MTOM, OEW, s_ref, ar, range_km,  mach)
+function [ATR100, climate_bd] = Engine_code(season, per_leg)
+    % % Global Parameters
+    % m_tom = MTOM;             
+    % m_oew = OEW;               
+    % m_payload = m_tom - m_oew;            
+    % %s_ref = s_ref;                
+    % %ar = ar;                    
+    % e_app = 1.80;                 
+    % cd0 = 0.0221;                 
+    % k = 1 / (pi * ar * e_app);    
+    % g = 9.80665;                  
+    % 
+    % % Propulsion Profile
+    % eng_fn0 = 362300;             
+    % eng_sfc_a = 1.41e-5;          
+    % eng_sfc_b = 0.48e-5;          
+    % 
+    % % Mission 
+    % % range_km = range;        
+    % alt_m = 10668;                
+    % % mach = 0.80;                  
+    % 
+    % [T_cruise, a_cruise, p_cruise, rho_cruise] = atmosisa(alt_m);
+    % [T_sl, a_sl, p_sl, rho_sl] = atmosisa(0);
+    % 
+    % v_cruise = mach * a_cruise;   
+    % delta = p_cruise / p_sl;      
+    % theta = T_cruise / T_sl;      
+    % 
+    % % Full Mission Profile
+    % % Take-off
+    % w0 = m_tom * g;
+    % ff_to = 0.970;
+    % w1 = w0 * ff_to;
+    % fuel_to = (w0 - w1) / g;
+    % 
+    % % Climb
+    % ff_climb = 0.985;
+    % w2 = w1 * ff_climb;
+    % fuel_climb = (w1 - w2) / g;
+    % 
+    % % Cruise
+    % w_start_cruise = w2;
+    % cl_cruise = w_start_cruise / (0.5 * rho_cruise * v_cruise^2 * s_ref);
+    % cd_cruise = cd0 + k * cl_cruise^2;
+    % ld_cruise = cl_cruise / cd_cruise;
+    % 
+    % % TSFC Refined for Altitude & Mach
+    % sfc_cruise = (eng_sfc_a + eng_sfc_b * mach) * sqrt(theta);
+    % 
+    % range_m = range_km * 1000;
+    % weight_ratio = exp((range_m * g * sfc_cruise) / (v_cruise * ld_cruise));
+    % w3 = w_start_cruise / weight_ratio;
+    % fuel_cruise = (w_start_cruise - w3) / g;
+    % 
+    % % Approach
+    % ff_app = 0.992;
+    % w4 = w3 * ff_app;
+    % fuel_app = (w3 - w4) / g;
     
-    v_cruise = mach * a_cruise;   
-    delta = p_cruise / p_sl;      
-    theta = T_cruise / T_sl;      
-
-    % Full Mission Profile
-    % Take-off
-    w0 = m_tom * g;
-    ff_to = 0.970;
-    w1 = w0 * ff_to;
-    fuel_to = (w0 - w1) / g;
-
-    % Climb
-    ff_climb = 0.985;
-    w2 = w1 * ff_climb;
-    fuel_climb = (w1 - w2) / g;
-
-    % Cruise
-    w_start_cruise = w2;
-    cl_cruise = w_start_cruise / (0.5 * rho_cruise * v_cruise^2 * s_ref);
-    cd_cruise = cd0 + k * cl_cruise^2;
-    ld_cruise = cl_cruise / cd_cruise;
     
-    % TSFC Refined for Altitude & Mach
-    sfc_cruise = (eng_sfc_a + eng_sfc_b * mach) * sqrt(theta);
-    
-    range_m = range_km * 1000;
-    weight_ratio = exp((range_m * g * sfc_cruise) / (v_cruise * ld_cruise));
-    w3 = w_start_cruise / weight_ratio;
-    fuel_cruise = (w_start_cruise - w3) / g;
-
-    % Approach
-    ff_app = 0.992;
-    w4 = w3 * ff_app;
-    fuel_app = (w3 - w4) / g;
-
-    total_fuel_burn = (w0 - w4) / g;
+    total_fuel_burn(i) = per_leg(i).BlockFuel_kg;
 
     % Climate Impact 
     ei_co2 = 3.16;

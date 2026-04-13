@@ -20,7 +20,7 @@ clear; clc; close all;
 
 %    payload [kg] M_c   Span   Alt   SAF   Range_km  MTOM_t
 lb = [ 100000,    0.80,   40,  10.0,   0,    10000  ]; % lower boundary
-ub = [250000,    0.92,   65,  15.0,   1,   17000  ]; % upper boundary
+ub = [250000,    0.92,   65,  15.5,   1,   17000  ]; % upper boundary
 n_vars = numel(lb);
 
 x_nom = [123000,   0.85,   60,  11.0,   1.0,  8000 ];  % nominal design
@@ -761,7 +761,7 @@ function J = mdo_wrapper(x, objective, n_flights, total_payload, penalty)
         ADP.TLAR.Alt_max    = max(Alt_m + 500, ADP.TLAR.Alt_max);
         ADP.TLAR.Range      = Range_m;
         ADP.TLAR.Payload    = payload_per_ac;
-        ADP.Engine = Boxwing.cast.eng.TurboFan.UltraFan(1.0, Alt_m, M_c);
+        ADP.Engine = Boxwing.cast.eng.TurboFan.GE90(1.0, Alt_m, M_c);  
         ADP.CockpitLength   = 6.5;
         ADP.CabinRadius     = 2.93;
         ADP.CabinLength     = 70.0 - 6.5 - 2.93*2*1.48;
@@ -823,15 +823,12 @@ function J = mdo_wrapper(x, objective, n_flights, total_payload, penalty)
     end
 
     T_max_kN = ADP.Engine.T_Static / 1000;
-    if  isempty(T_max_kN)
-        T_max_kN = 380; % kN
-    end
 
     try
         switch upper(objective)
             case 'DOC'
                 [~, per_leg] = Boxwing.script.MissionAnalysis.Missionanalysisallflights(ADP, N_fleet, SAF_ratio);
-                [doc, ~, ~] = Boxwing.script.DOC(ADP, N_fleet, SAF_ratio, per_leg, T_max_kN);
+                [doc, ~, ~] = Boxwing.DOC(ADP, N_fleet, SAF_ratio, per_leg);
                 % J = Boxwing.script.DOC(ADP.MTOM/1e3, ADP.OEM, out.BlockFuel, ...
                 %         N_fleet, SAF_ratio, M_c, T_max_kN);
                 J = doc;
